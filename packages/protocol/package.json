@@ -1,0 +1,39 @@
+{
+  "name": "@adikuma/breadcrumb-protocol",
+  "version": "0.2.0",
+  "type": "module",
+  "description": "schema and validation helpers for breadcrumb review handoffs",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "check": "tsc -p tsconfig.json --noEmit && vitest run",
+    "lint": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "yaml": "2.9.0",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "typescript": "6.0.3",
+    "vitest": "4.1.8"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/adikuma-labs/breadcrumb-protocol.git",
+    "directory": "packages/protocol"
+  },
+  "homepage": "https://github.com/adikuma-labs/breadcrumb-protocol#readme",
+  "license": "MIT"
+}

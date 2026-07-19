@@ -1,0 +1,14 @@
+packages:
+  - "packages/*"
+
+allowBuilds:
+  esbuild: true
+blockExoticSubdeps: true
+dangerouslyAllowAllBuilds: false
+
+minimumReleaseAge: 10080
+minimumReleaseAgeIgnoreMissingTime: false
+minimumReleaseAgeStrict: true
+
+strictDepBuilds: true
+trustPolicy: no-downgrade

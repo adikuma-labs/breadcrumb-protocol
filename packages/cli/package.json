@@ -1,0 +1,45 @@
+{
+  "name": "@adikuma/breadcrumb",
+  "version": "0.4.0",
+  "type": "module",
+  "description": "cli for creating and checking breadcrumb review handoffs",
+  "bin": {
+    "breadcrumb": "./dist/index.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "check": "corepack pnpm --filter @adikuma/breadcrumb-protocol build && tsc -p tsconfig.json --noEmit && vitest run --testTimeout=20000",
+    "lint": "corepack pnpm --filter @adikuma/breadcrumb-protocol build && tsc -p tsconfig.json --noEmit",
+    "test": "corepack pnpm --filter @adikuma/breadcrumb-protocol build && vitest run --testTimeout=20000",
+    "typecheck": "corepack pnpm --filter @adikuma/breadcrumb-protocol build && tsc -p tsconfig.json --noEmit",
+    "testbeds": "node scripts/make-testbeds.mjs",
+    "smoke": "node scripts/smoke-pack.mjs"
+  },
+  "dependencies": {
+    "@adikuma/breadcrumb-protocol": "workspace:*",
+    "@clack/prompts": "^1.5.1"
+  },
+  "devDependencies": {
+    "@types/node": "25.9.1",
+    "typescript": "6.0.3",
+    "vitest": "4.1.8"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/adikuma-labs/breadcrumb-protocol.git",
+    "directory": "packages/cli"
+  },
+  "homepage": "https://github.com/adikuma-labs/breadcrumb-protocol#readme",
+  "license": "MIT"
+}
