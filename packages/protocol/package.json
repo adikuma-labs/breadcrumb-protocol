@@ -1,6 +1,6 @@
 {
   "name": "@adikuma/breadcrumb-protocol",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "type": "module",
   "description": "schema and validation helpers for breadcrumb review handoffs",
   "exports": {
@@ -12,7 +12,8 @@
   "types": "./dist/index.d.ts",
   "files": [
     "dist",
-    "README.md"
+    "README.md",
+    "LICENSE"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json",

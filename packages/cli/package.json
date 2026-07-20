@@ -1,6 +1,6 @@
 {
   "name": "@adikuma/breadcrumb",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "type": "module",
   "description": "cli for creating and checking breadcrumb review handoffs",
   "bin": {
@@ -15,7 +15,8 @@
   "types": "./dist/index.d.ts",
   "files": [
     "dist",
-    "README.md"
+    "README.md",
+    "LICENSE"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
