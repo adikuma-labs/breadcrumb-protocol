@@ -338,7 +338,7 @@ export async function checkTask(
 
   warnings.push(...validation.warnings);
 
-  const base = options.base ?? (await readDefaultBranch(cwd));
+  const base = options.base ?? (await resolveBase(cwd, await readDefaultBranch(cwd)));
   const changedFiles = await getChangedFiles(cwd, base);
   const coverage = compareReviewToChangedFiles(validation.data, changedFiles);
 
@@ -384,17 +384,24 @@ export async function checkTask(
   return writeCheckResult({ ok, errors, warnings, coverage }, options, output);
 }
 
+// drops an inline value so --task=id registers as the task flag
+function flagName(raw: string): string {
+  const equals = raw.indexOf("=");
+  return equals >= 0 ? raw.slice(0, equals) : raw;
+}
+
 // parses command line arguments into a command and flags
 function parseArgs(args: string[]): ParsedArgs {
   const command = args[0];
   const rest = args.slice(1);
   const flags = new Set<string>();
 
+  // agents write --task=id as often as --task id so both forms parse
   for (const arg of args) {
     if (arg.startsWith("--")) {
-      flags.add(arg.slice(2));
+      flags.add(flagName(arg.slice(2)));
     } else if (arg.startsWith("-")) {
-      flags.add(arg.slice(1));
+      flags.add(flagName(arg.slice(1)));
     }
   }
 
@@ -426,8 +433,7 @@ async function runCheckCommand(
   output: CliResult,
 ): Promise<void> {
   const ci = flags.has("ci");
-  const taskIndex = args.indexOf("--task");
-  let id = taskIndex >= 0 ? args[taskIndex + 1] : undefined;
+  let id = getFlagValue(args, "--task");
 
   const options: CheckOptions = {
     json: flags.has("json"),
@@ -438,11 +444,11 @@ async function runCheckCommand(
 
   if (base) {
     options.base = base;
-  } else if (ci) {
-    // prefer the remote ref only when github provides the base so a local run
-    // diffs against the local branch instead of a possibly stale origin
-    const envRef = process.env.GITHUB_BASE_REF;
-    options.base = envRef ? await resolveCiBase(cwd, envRef) : await readDefaultBranch(cwd);
+  } else {
+    // a local branch goes stale the moment you stop pulling it, so every path
+    // prefers the remote tracking ref and falls back to the local name
+    const envRef = ci ? process.env.GITHUB_BASE_REF : undefined;
+    options.base = await resolveBase(cwd, envRef ?? (await readDefaultBranch(cwd)));
   }
 
   if (ci && !(await gitRefExists(cwd, options.base ?? "main"))) {
@@ -557,8 +563,9 @@ async function gitRefExists(cwd: string, ref: string): Promise<boolean> {
   }
 }
 
-// prefers the remote tracking ref since ci checkouts have no local branches
-async function resolveCiBase(cwd: string, ref: string): Promise<string> {
+// prefers the remote tracking ref, the local branch is only a fallback
+// no fetch happens here so check stays offline and deterministic
+async function resolveBase(cwd: string, ref: string): Promise<string> {
   if (ref.startsWith("origin/")) {
     return ref;
   }
@@ -695,23 +702,37 @@ async function readDefaultBranch(cwd: string): Promise<string> {
 }
 
 // detects the best default branch for new breadcrumb config
+// never falls back to the current branch, that would make check diff a branch
+// against itself and pass no matter what changed
 async function detectDefaultBranch(cwd: string): Promise<string> {
-  const gitDir = await resolveGitDir(cwd);
-  const remoteDefault = await readGitRefBranch(
-    path.join(gitDir, "refs", "remotes", "origin", "HEAD"),
-    "refs/remotes/origin/",
-  );
+  const head = await readSymbolicRef(cwd, "refs/remotes/origin/HEAD");
 
-  if (remoteDefault) {
-    return remoteDefault;
+  if (head) {
+    return head;
   }
 
-  const currentBranch = await readGitRefBranch(
-    path.join(gitDir, "HEAD"),
-    "refs/heads/",
-  );
+  for (const candidate of ["origin/main", "origin/master", "main", "master"]) {
+    if (await gitRefExists(cwd, candidate)) {
+      return stripOrigin(candidate);
+    }
+  }
 
-  return currentBranch || "main";
+  return "main";
+}
+
+// asks git rather than reading the ref file so packed refs resolve too
+async function readSymbolicRef(cwd: string, ref: string): Promise<string | null> {
+  try {
+    const { stdout } = await execFileAsync("git", ["symbolic-ref", "--short", ref], { cwd });
+    const value = stdout.trim();
+    return value ? stripOrigin(value) : null;
+  } catch {
+    return null;
+  }
+}
+
+function stripOrigin(ref: string): string {
+  return ref.startsWith("origin/") ? ref.slice("origin/".length) : ref;
 }
 
 // reads changed files from git name-status output
@@ -786,43 +807,6 @@ async function readGitLines(cwd: string, args: string[]): Promise<string[]> {
   const { stdout } = await execFileAsync("git", args, { cwd });
 
   return stdout.split(/\r?\n/).filter(Boolean);
-}
-
-// resolves the local git directory for regular repos and worktrees
-async function resolveGitDir(cwd: string): Promise<string> {
-  const dotGit = path.join(cwd, ".git");
-  const directGitHead = path.join(dotGit, "HEAD");
-
-  if (await fileExists(directGitHead)) {
-    return dotGit;
-  }
-
-  try {
-    const source = await readFile(dotGit, "utf8");
-    const match = source.match(/^gitdir:\s*(.+)$/m);
-    const gitDir = match?.[1]?.trim();
-
-    if (gitDir) {
-      return path.isAbsolute(gitDir) ? gitDir : path.resolve(cwd, gitDir);
-    }
-  } catch {
-    return dotGit;
-  }
-
-  return dotGit;
-}
-
-// reads a symbolic git ref and returns the branch name for the prefix
-async function readGitRefBranch(filePath: string, prefix: string): Promise<string | null> {
-  try {
-    const source = await readFile(filePath, "utf8");
-    const match = source.trim().match(/^ref:\s*(.+)$/);
-    const ref = match?.[1]?.trim();
-
-    return ref?.startsWith(prefix) ? ref.slice(prefix.length) : null;
-  } catch {
-    return null;
-  }
 }
 
 // parses one git name-status line
@@ -931,8 +915,14 @@ function assertSafeTaskId(id: string): void {
   }
 }
 
-// extracts a flag value from positional args
+// extracts a flag value written either as --flag value or --flag=value
 function getFlagValue(args: string[], flag: string): string | undefined {
+  const inline = args.find((arg) => arg.startsWith(`${flag}=`));
+
+  if (inline !== undefined) {
+    return inline.slice(flag.length + 1);
+  }
+
   const index = args.indexOf(flag);
   return index >= 0 ? args[index + 1] : undefined;
 }

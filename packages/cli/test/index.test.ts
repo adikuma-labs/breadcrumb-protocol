@@ -61,6 +61,87 @@ function read(cwd: string, rel: string): Promise<string> {
   return readFile(path.join(cwd, rel), "utf8");
 }
 
+describe("default branch detection", () => {
+  it("never records the current branch when there is no remote", async () => {
+    const cwd = await createRepo("feature/some-work");
+
+    await initProject(cwd, { agents: [] }, createOutput());
+
+    const config = await read(cwd, ".breadcrumb/config.yml");
+    expect(config).toContain("default_branch: main");
+    expect(config).not.toContain("feature/some-work");
+  });
+
+  it("reads the real default branch from origin HEAD", async () => {
+    const origin = await createRepo("trunk");
+    const cwd = await mkdtemp(path.join(os.tmpdir(), "breadcrumb-clone-"));
+    await execFileAsync("git", ["clone", origin, cwd]);
+    await execFileAsync("git", ["config", "user.email", "test@example.com"], { cwd });
+    await execFileAsync("git", ["config", "user.name", "Test User"], { cwd });
+
+    await initProject(cwd, { agents: [] }, createOutput());
+
+    expect(await read(cwd, ".breadcrumb/config.yml")).toContain("default_branch: trunk");
+  });
+});
+
+describe("flag parsing", () => {
+  it("accepts --task=id as well as --task id", async () => {
+    const cwd = await createCiRepo();
+
+    const inline = await runCli(["check", "--task=quote-add-ons", "--json"], cwd);
+    const spaced = await runCli(["check", "--task", "quote-add-ons", "--json"], cwd);
+
+    expect(inline.stderr).toEqual([]);
+    expect(inline.stdout).toEqual(spaced.stdout);
+  });
+
+  it("reports the same unknown task either way", async () => {
+    const cwd = await createRepo();
+    await initProject(cwd, { agents: [] }, createOutput());
+
+    const result = await runCli(["check", "--task=missing"], cwd);
+
+    expect(result.exitCode).toBe(1);
+    expect(JSON.stringify(result)).toContain("missing");
+  });
+});
+
+describe("check base resolution", () => {
+  it("diffs against origin rather than a stale local branch", async () => {
+    const cwd = await createRepo();
+    await initProject(cwd, { agents: [] }, createOutput());
+    await commitAll(cwd, "chore: breadcrumb init");
+    const stale = (await execFileAsync("git", ["rev-parse", "HEAD"], { cwd })).stdout.trim();
+
+    // main moves on and origin follows it, then the local ref is rewound
+    await writeFile(path.join(cwd, "other.ts"), "export const other = 1;\n", "utf8");
+    await commitAll(cwd, "feat: other");
+    const current = (await execFileAsync("git", ["rev-parse", "HEAD"], { cwd })).stdout.trim();
+    await execFileAsync("git", ["update-ref", "refs/remotes/origin/main", current], { cwd });
+    await execFileAsync("git", ["checkout", "-b", "feature/base"], { cwd });
+    await execFileAsync("git", ["branch", "-f", "main", stale], { cwd });
+
+    const id = "quote-add-ons";
+    await writeFile(path.join(cwd, "src.ts"), "export const value = 1;\n", "utf8");
+    await createTask(cwd, id, createOutput());
+    await writeFile(
+      path.join(cwd, ".breadcrumb", "tasks", id, "review.yml"),
+      getValidReviewYaml(),
+      "utf8",
+    );
+    await commitAll(cwd, "feat: add value");
+
+    const output = createOutput();
+    await checkTask(cwd, id, { json: true, strict: false, ci: false }, output);
+    const result = JSON.parse(output.stdout[0] ?? "{}");
+
+    // other.ts only appears when the stale local main is used as the base
+    const mentioned = JSON.stringify(result);
+    expect(mentioned).not.toContain("other.ts");
+  });
+});
+
 describe("initProject instruction files", () => {
   it("creates AGENTS.md and CLAUDE.md when none exist", async () => {
     const cwd = await createRepo();

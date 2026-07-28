@@ -125,7 +125,17 @@ Normal pull request tools show what changed. Breadcrumb adds how to read it: the
 
 ## Releasing
 
-Before bumping the version and publishing, run the packaging smoke test. It packs the tarball, installs it into a clean directory, and runs the installed binary, so a missing file fails here instead of after publish:
+Publishing happens in CI. Bump the version in `package.json`, merge it, then push a tag that names the package and matches that version:
+
+```bash
+git tag cli-v0.4.2 && git push origin cli-v0.4.2
+```
+
+The release workflow builds, tests, runs the packaging smoke test, checks the tag against `package.json`, and publishes with npm trusted publishing. There is no npm token, and a tag that disagrees with the version fails before anything ships.
+
+`protocol-v<version>` releases the protocol package the same way.
+
+To check a release locally first:
 
 ```bash
 pnpm --filter @adikuma/breadcrumb check   # types + unit tests
