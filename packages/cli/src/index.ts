@@ -445,8 +445,7 @@ async function runCheckCommand(
   if (base) {
     options.base = base;
   } else {
-    // a local branch goes stale the moment you stop pulling it, so every path
-    // prefers the remote tracking ref and falls back to the local name
+    // remote tracking ref
     const envRef = ci ? process.env.GITHUB_BASE_REF : undefined;
     options.base = await resolveBase(cwd, envRef ?? (await readDefaultBranch(cwd)));
   }
@@ -563,8 +562,7 @@ async function gitRefExists(cwd: string, ref: string): Promise<boolean> {
   }
 }
 
-// prefers the remote tracking ref, the local branch is only a fallback
-// no fetch happens here so check stays offline and deterministic
+// remote tracking ref
 async function resolveBase(cwd: string, ref: string): Promise<string> {
   if (ref.startsWith("origin/")) {
     return ref;

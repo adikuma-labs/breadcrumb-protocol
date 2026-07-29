@@ -1,6 +1,6 @@
 name: release
 
-# one tag names one package, cli-v0.4.2 or protocol-v0.3.0
+# one tag names one package
 on:
   push:
     tags:
@@ -9,8 +9,7 @@ on:
 
 permissions:
   contents: read
-  # npm trusted publishing swaps this for a short lived token, so there is no
-  # long lived NPM_TOKEN to leak or rotate
+  # npm trusted publishing swaps this for a short lived token
   id-token: write
 
 jobs:
