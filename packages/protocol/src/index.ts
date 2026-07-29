@@ -52,6 +52,15 @@ const reviewSequenceSectionSchema = z
   })
   .strict();
 
+// only the handle and the caption, everything else about an upload lives on the
+// server and would drift the moment it changed
+export const evidenceSchema = z
+  .object({
+    id: z.string().min(1, "id is required"),
+    caption: z.string().min(1).optional(),
+  })
+  .strict();
+
 export const breadcrumbReviewSchema = z
   .object({
     version: z.literal(BREADCRUMB_PROTOCOL_VERSION),
@@ -65,6 +74,7 @@ export const breadcrumbReviewSchema = z
       .array(reviewSequenceSectionSchema)
       .min(1, "review_sequence must include at least one section"),
     files: z.array(fileSchema).min(1, "files must include at least one file"),
+    evidence: z.array(evidenceSchema).optional(),
   })
   .strict()
   .superRefine((review, ctx) => {

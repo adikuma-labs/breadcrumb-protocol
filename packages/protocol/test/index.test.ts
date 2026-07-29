@@ -36,6 +36,52 @@ files:
       - Whether existing quotes need a backfill.
 `;
 
+describe("evidence", () => {
+  it("accepts a handoff with evidence attached", () => {
+    const result = parseBreadcrumbReviewYaml(
+      `${validYaml}
+evidence:
+  - id: ev_abc123
+    caption: the picker updates the total
+  - id: ev_def456
+`,
+    );
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data.evidence?.[0]?.id).toBe("ev_abc123");
+      expect(result.data.evidence?.[1]?.caption).toBeUndefined();
+    }
+  });
+
+  it("still accepts a handoff with no evidence at all", () => {
+    expect(parseBreadcrumbReviewYaml(validYaml).ok).toBe(true);
+  });
+
+  it("rejects an evidence entry with no id", () => {
+    const result = parseBreadcrumbReviewYaml(
+      `${validYaml}
+evidence:
+  - caption: missing its handle
+`,
+    );
+
+    expect(result.ok).toBe(false);
+  });
+
+  it("rejects unknown keys inside an evidence entry", () => {
+    const result = parseBreadcrumbReviewYaml(
+      `${validYaml}
+evidence:
+  - id: ev_abc123
+    readUrl: https://example.com/signed
+`,
+    );
+
+    expect(result.ok).toBe(false);
+  });
+});
+
 describe("parseBreadcrumbReviewYaml", () => {
   it("parses a valid review handoff", () => {
     const result = parseBreadcrumbReviewYaml(validYaml);

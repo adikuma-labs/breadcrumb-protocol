@@ -17,6 +17,7 @@ import {
 } from "@adikuma/breadcrumb-protocol";
 
 import { cancel, confirm, intro, isCancel, select } from "@clack/prompts";
+import { isSeq, parseDocument } from "yaml";
 
 const execFileAsync = promisify(execFile);
 
@@ -105,6 +106,11 @@ export async function runCli(args: string[], cwd = process.cwd()): Promise<CliRe
 
     if (parsed.command === "check") {
       await runCheckCommand(parsed.rest, parsed.flags, cwd, output);
+      return output;
+    }
+
+    if (parsed.command === "evidence") {
+      await runEvidenceCommand(parsed.rest, cwd, output);
       return output;
     }
 
@@ -913,6 +919,344 @@ function assertSafeTaskId(id: string): void {
   }
 }
 
+const DEFAULT_API_URL = "https://app.breadcrumb.run";
+
+// only what a browser plays without a plugin, matching the server allowlist
+const CONTENT_TYPES: Record<string, string> = {
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".webp": "image/webp",
+  ".mp4": "video/mp4",
+  ".webm": "video/webm",
+};
+
+type EvidenceReservation = {
+  id: string;
+  uploadUrl: string;
+  uploadHeaders: Record<string, string>;
+};
+
+// a failure the user can act on, as opposed to a crash
+class EvidenceError extends Error {}
+
+function fail(message: string): never {
+  throw new EvidenceError(message);
+}
+
+function apiBase(): string {
+  return (process.env.BREADCRUMB_API_URL || DEFAULT_API_URL).replace(/\/+$/, "");
+}
+
+// dispatches the evidence subcommands
+async function runEvidenceCommand(
+  args: string[],
+  cwd: string,
+  output: CliResult,
+): Promise<void> {
+  const [subcommand, ...rest] = args;
+
+  if (subcommand !== "add") {
+    output.exitCode = 1;
+    output.stderr.push("usage: breadcrumb evidence add <file> --task <id>");
+    return;
+  }
+
+  const file = rest.find((arg) => !arg.startsWith("-") && !isFlagValue(rest, arg));
+
+  try {
+    await addEvidence(
+      {
+        file,
+        taskId: getFlagValue(rest, "--task"),
+        caption: getFlagValue(rest, "--caption"),
+        repo: getFlagValue(rest, "--repo"),
+      },
+      cwd,
+      output,
+    );
+  } catch (error) {
+    output.exitCode = 1;
+    output.stderr.push(
+      error instanceof EvidenceError ? error.message : `evidence upload failed: ${String(error)}`,
+    );
+  }
+}
+
+// a positional is only a file when it is not the value that follows a flag
+function isFlagValue(args: string[], candidate: string): boolean {
+  const index = args.indexOf(candidate);
+  const previous = index > 0 ? args[index - 1] : undefined;
+  return previous !== undefined && previous.startsWith("--") && !previous.includes("=");
+}
+
+// uploads one file and records the handle in the task handoff
+async function addEvidence(
+  input: {
+    file?: string | undefined;
+    taskId?: string | undefined;
+    caption?: string | undefined;
+    repo?: string | undefined;
+  },
+  cwd: string,
+  output: CliResult,
+): Promise<void> {
+  if (!input.file) {
+    fail("usage: breadcrumb evidence add <file> --task <id>");
+  }
+  if (!input.taskId) {
+    fail("missing --task. name the task this evidence belongs to");
+  }
+
+  // everything checkable without credentials is checked first, so a typo in the
+  // task name never reports itself as a missing api key
+  const reviewPath = path.join(cwd, BREADCRUMB_DIR, TASKS_DIR, input.taskId, REVIEW_FILE);
+  if (!(await fileExists(reviewPath))) {
+    fail(
+      `no handoff at ${BREADCRUMB_DIR}/${TASKS_DIR}/${input.taskId}/${REVIEW_FILE}. run breadcrumb task new ${input.taskId} first`,
+    );
+  }
+
+  const filePath = path.resolve(cwd, input.file);
+  if (!(await fileExists(filePath))) {
+    fail(`no file at ${input.file}`);
+  }
+
+  const extension = path.extname(filePath).toLowerCase();
+  const contentType = CONTENT_TYPES[extension];
+  if (!contentType) {
+    fail(
+      `${extension || "that file"} is not supported. use png jpeg webp mp4 or webm`,
+    );
+  }
+
+  const bytes = await readFile(filePath);
+  if (bytes.byteLength === 0) {
+    fail(`${input.file} is empty`);
+  }
+
+  const repoFullName = input.repo ?? (await detectRepoFullName(cwd));
+
+  const key = process.env.BREADCRUMB_API_KEY;
+  if (!key) {
+    fail("no api key. create one in breadcrumb settings then export BREADCRUMB_API_KEY");
+  }
+
+  // a bad key fails here rather than halfway through an upload
+  await verifyKey(key);
+
+  const reservation = await reserveEvidence(key, {
+    repoFullName,
+    taskId: input.taskId,
+    contentType,
+    sizeBytes: bytes.byteLength,
+    caption: input.caption,
+  });
+
+  await uploadBytes(reservation, bytes);
+  await confirmUpload(key, reservation.id);
+
+  output.stdout.push(`uploaded ${reservation.id}`);
+
+  await recordEvidence(reviewPath, reservation.id, input.caption);
+  output.stdout.push(
+    `recorded in ${BREADCRUMB_DIR}/${TASKS_DIR}/${input.taskId}/${REVIEW_FILE}`,
+  );
+}
+
+// reads owner/repo from the git remote so the caller does not have to
+async function detectRepoFullName(cwd: string): Promise<string> {
+  const remotes = await readGitLines(cwd, ["remote"]);
+
+  if (remotes.length === 0) {
+    fail("no git remote to read the repo name from. pass --repo owner/name");
+  }
+
+  const chosen = remotes.includes("origin")
+    ? "origin"
+    : remotes.length === 1
+      ? remotes[0]!
+      : fail("several git remotes and no origin. pass --repo owner/name");
+
+  const [url] = await readGitLines(cwd, ["remote", "get-url", chosen]);
+  if (!url) {
+    fail(`could not read the url for the ${chosen} remote. pass --repo owner/name`);
+  }
+
+  const parsed = parseGithubRemote(url);
+  if (!parsed) {
+    fail(`${url} is not a github remote. pass --repo owner/name`);
+  }
+
+  return parsed;
+}
+
+// accepts the ssh scp and https remote spellings github hands out
+export function parseGithubRemote(url: string): string | null {
+  const trimmed = url.trim().replace(/\.git$/, "");
+  const patterns = [
+    /^git@github\.com:([^/]+)\/(.+)$/,
+    /^ssh:\/\/git@github\.com\/([^/]+)\/(.+)$/,
+    /^https?:\/\/(?:[^@/]+@)?github\.com\/([^/]+)\/(.+)$/,
+  ];
+
+  for (const pattern of patterns) {
+    const match = trimmed.match(pattern);
+    if (match?.[1] && match[2]) {
+      return `${match[1]}/${match[2]}`;
+    }
+  }
+
+  return null;
+}
+
+// the api answers json even on failure so the message is worth surfacing
+async function readApiError(response: Response, fallback: string): Promise<string> {
+  try {
+    const body = (await response.json()) as { error?: unknown };
+    return typeof body.error === "string" ? body.error : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+async function verifyKey(key: string): Promise<void> {
+  const response = await fetch(`${apiBase()}/api/v1/whoami`, {
+    headers: { authorization: `Bearer ${key}` },
+  });
+
+  if (response.status === 401) {
+    fail("that api key was rejected. check it has not been revoked in settings");
+  }
+  if (!response.ok) {
+    fail(await readApiError(response, "breadcrumb could not verify the api key"));
+  }
+}
+
+async function reserveEvidence(
+  key: string,
+  body: {
+    repoFullName: string;
+    taskId: string;
+    contentType: string;
+    sizeBytes: number;
+    caption?: string | undefined;
+  },
+): Promise<EvidenceReservation> {
+  const response = await fetch(`${apiBase()}/api/v1/evidence`, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${key}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (response.status === 403) {
+    fail(
+      `breadcrumb cannot see ${body.repoFullName}. add it to your repositories, or pass --repo if this remote is a fork`,
+    );
+  }
+  if (!response.ok) {
+    // the server carries the real size limits so its message is the honest one
+    fail(await readApiError(response, `could not reserve storage (${response.status})`));
+  }
+
+  const json = (await response.json()) as {
+    id?: string;
+    uploadUrl?: string;
+    uploadHeaders?: Record<string, string>;
+  };
+
+  if (!json.id || !json.uploadUrl || !json.uploadHeaders) {
+    fail("breadcrumb returned an unexpected response when reserving storage");
+  }
+
+  return { id: json.id, uploadUrl: json.uploadUrl, uploadHeaders: json.uploadHeaders };
+}
+
+// the presigned url carries its own permission so the api key must not ride along
+async function uploadBytes(
+  reservation: EvidenceReservation,
+  bytes: Buffer,
+): Promise<void> {
+  const response = await fetch(reservation.uploadUrl, {
+    method: "PUT",
+    headers: reservation.uploadHeaders,
+    body: new Uint8Array(bytes),
+  });
+
+  if (response.status === 403) {
+    fail("storage refused the upload, it may have expired. re-run the command");
+  }
+  if (!response.ok) {
+    fail(`the upload did not complete (${response.status}). re-run the command`);
+  }
+}
+
+// confirm answers 409 both when nothing landed and when it already succeeded so
+// a timed out retry has to ask what the truth is rather than assume failure
+async function confirmUpload(key: string, id: string): Promise<void> {
+  const response = await fetch(`${apiBase()}/api/v1/evidence/${id}`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${key}` },
+  });
+
+  if (response.ok) {
+    return;
+  }
+
+  if (response.status === 409 && (await isAlreadyUploaded(key, id))) {
+    return;
+  }
+
+  fail(
+    `the upload did not arrive (${id}). re-run the command`,
+  );
+}
+
+async function isAlreadyUploaded(key: string, id: string): Promise<boolean> {
+  try {
+    const response = await fetch(`${apiBase()}/api/v1/evidence/${id}`, {
+      headers: { authorization: `Bearer ${key}` },
+    });
+
+    if (!response.ok) {
+      return false;
+    }
+
+    const json = (await response.json()) as { uploaded?: unknown };
+    return json.uploaded === true;
+  } catch {
+    return false;
+  }
+}
+
+// appends the handle without reformatting the handoff or dropping its comments
+export async function recordEvidence(
+  reviewPath: string,
+  id: string,
+  caption: string | undefined,
+): Promise<void> {
+  const source = await readFile(reviewPath, "utf8");
+  const doc = parseDocument(source);
+  const entry: Record<string, string> = { id };
+
+  if (caption) {
+    entry.caption = caption;
+  }
+
+  const existing = doc.get("evidence");
+
+  if (isSeq(existing)) {
+    existing.add(doc.createNode(entry));
+  } else {
+    doc.set("evidence", doc.createNode([entry]));
+  }
+
+  await writeFile(reviewPath, doc.toString(), "utf8");
+}
+
 // extracts a flag value written either as --flag value or --flag=value
 function getFlagValue(args: string[], flag: string): string | undefined {
   const inline = args.find((arg) => arg.startsWith(`${flag}=`));
@@ -994,6 +1338,16 @@ It covers:
 - \`review_sequence\`: the order to read files, simplest entry point first
 - per file: \`why\` it changed, \`risk\` (low / medium / high), any \`unknowns\` to confirm
 
+## Evidence
+
+When a change is visual or behavioural, capture proof it runs and attach it:
+
+\`\`\`
+breadcrumb evidence add ./demo.mp4 --task <task-id> --caption "what the reviewer is looking at"
+\`\`\`
+
+The reviewer watches it before reading the diff, so they spend their attention on how you did it rather than whether you did it. Skip evidence when there is nothing to see, such as a pure refactor. One or two clips, not a reel.
+
 Do not add model or agent attribution. Do not invent certainty; put doubts in \`unknowns\`.`;
 }
 
@@ -1035,6 +1389,28 @@ Weak: "Added AddOn type and updated QuoteTotal."
 - \`why\` one line on why this file changed and what to look at.
 - \`risk\` low / medium / high. Be honest. Money, auth, migrations, and data deletion skew high; a typo fix is low.
 - \`unknowns\` things you could not verify and want the reviewer to confirm. A high risk file almost always has at least one. If you are sure of everything, leave it empty, do not invent doubt.
+
+## Evidence
+
+If the change is visual or behavioural, capture proof it actually runs and attach it to the task:
+
+\`\`\`
+breadcrumb evidence add ./demo.mp4 --task <task-id> --caption "add-on picker updates the total"
+\`\`\`
+
+This writes the handle into the handoff for you. Screenshots and short recordings only: png, jpeg, webp, mp4, webm.
+
+When it is worth it:
+- a ui change, a new screen or state, anything with a before and after
+- a bug fix where the point is that the broken thing now works
+- a flow with several steps, where a recording beats a paragraph
+
+When to skip it:
+- a refactor with no observable difference
+- config, types, docs, or tests
+- anything where a reader would learn nothing from watching
+
+Keep it to one or two captures. The caption should say what the reviewer is looking at, not what the file is. Never attach something you have not actually watched back.
 
 ## Tone
 
@@ -1117,6 +1493,7 @@ commands:
   breadcrumb task new <id>
   breadcrumb check --task <id> [--json] [--strict] [--base <ref>]
   breadcrumb check --ci [--base <ref>]
+  breadcrumb evidence add <file> --task <id> [--caption <text>] [--repo owner/name]
 `;
 }
 

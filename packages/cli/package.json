@@ -1,6 +1,6 @@
 {
   "name": "@adikuma/breadcrumb",
-  "version": "0.4.2",
+  "version": "0.5.0",
   "type": "module",
   "description": "cli for creating and checking breadcrumb review handoffs",
   "bin": {
@@ -29,7 +29,8 @@
   },
   "dependencies": {
     "@adikuma/breadcrumb-protocol": "workspace:*",
-    "@clack/prompts": "^1.5.1"
+    "@clack/prompts": "^1.5.1",
+    "yaml": "2.9.0"
   },
   "devDependencies": {
     "@types/node": "25.9.1",

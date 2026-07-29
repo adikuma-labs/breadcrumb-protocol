@@ -13,6 +13,8 @@ import {
   createTask,
   initProject,
   isCliEntryPoint,
+  parseGithubRemote,
+  recordEvidence,
   runCli,
   type CliResult,
 } from "../src/index";
@@ -82,6 +84,104 @@ describe("default branch detection", () => {
     await initProject(cwd, { agents: [] }, createOutput());
 
     expect(await read(cwd, ".breadcrumb/config.yml")).toContain("default_branch: trunk");
+  });
+});
+
+describe("parseGithubRemote", () => {
+  it("reads every spelling github hands out", () => {
+    const expected = "adikuma/breadcrumb-lab";
+    expect(parseGithubRemote("git@github.com:adikuma/breadcrumb-lab.git")).toBe(expected);
+    expect(parseGithubRemote("https://github.com/adikuma/breadcrumb-lab.git")).toBe(expected);
+    expect(parseGithubRemote("https://github.com/adikuma/breadcrumb-lab")).toBe(expected);
+    expect(parseGithubRemote("ssh://git@github.com/adikuma/breadcrumb-lab.git")).toBe(expected);
+    expect(parseGithubRemote("https://token@github.com/adikuma/breadcrumb-lab.git")).toBe(expected);
+  });
+
+  it("refuses hosts that are not github", () => {
+    expect(parseGithubRemote("https://gitlab.com/a/b.git")).toBeNull();
+    expect(parseGithubRemote("git@bitbucket.org:a/b.git")).toBeNull();
+    expect(parseGithubRemote("not a url")).toBeNull();
+  });
+});
+
+describe("recordEvidence", () => {
+  it("keeps comments and formatting in the handoff", async () => {
+    const cwd = await mkdtemp(path.join(os.tmpdir(), "breadcrumb-yaml-"));
+    const file = path.join(cwd, "review.yml");
+    const source = [
+      "version: 1",
+      "# this comment must survive",
+      "id: demo",
+      "title: A change",
+      "user_goal: Something the user asked for.",
+      "",
+    ].join("\n");
+    await writeFile(file, source, "utf8");
+
+    await recordEvidence(file, "ev_abc123", "the picker updates the total");
+
+    const next = await readFile(file, "utf8");
+    expect(next).toContain("# this comment must survive");
+    expect(next).toContain("ev_abc123");
+    expect(next).toContain("the picker updates the total");
+  });
+
+  it("appends to an existing list rather than replacing it", async () => {
+    const cwd = await mkdtemp(path.join(os.tmpdir(), "breadcrumb-yaml-"));
+    const file = path.join(cwd, "review.yml");
+    await writeFile(file, "version: 1\nid: demo\nevidence:\n  - id: ev_first\n", "utf8");
+
+    await recordEvidence(file, "ev_second", undefined);
+
+    const next = await readFile(file, "utf8");
+    expect(next).toContain("ev_first");
+    expect(next).toContain("ev_second");
+  });
+
+  it("writes no caption key when there is no caption", async () => {
+    const cwd = await mkdtemp(path.join(os.tmpdir(), "breadcrumb-yaml-"));
+    const file = path.join(cwd, "review.yml");
+    await writeFile(file, "version: 1\nid: demo\n", "utf8");
+
+    await recordEvidence(file, "ev_solo", undefined);
+
+    expect(await readFile(file, "utf8")).not.toContain("caption");
+  });
+});
+
+describe("evidence add failures", () => {
+  it("names the task before asking for credentials", async () => {
+    const cwd = await createRepo();
+    await initProject(cwd, { agents: [] }, createOutput());
+
+    const result = await runCli(["evidence", "add", "./x.png", "--task", "nope"], cwd);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr.join(" ")).toContain("breadcrumb task new nope");
+  });
+
+  it("rejects a file type the player cannot open", async () => {
+    const cwd = await createRepo();
+    await initProject(cwd, { agents: [] }, createOutput());
+    await createTask(cwd, "demo", createOutput());
+    await writeFile(path.join(cwd, "clip.gif"), "x", "utf8");
+
+    const result = await runCli(["evidence", "add", "./clip.gif", "--task", "demo"], cwd);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr.join(" ")).toContain("png jpeg webp mp4 or webm");
+  });
+
+  it("asks for --repo when there is no remote to read", async () => {
+    const cwd = await createRepo();
+    await initProject(cwd, { agents: [] }, createOutput());
+    await createTask(cwd, "demo", createOutput());
+    await writeFile(path.join(cwd, "shot.png"), "x", "utf8");
+
+    const result = await runCli(["evidence", "add", "./shot.png", "--task", "demo"], cwd);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr.join(" ")).toContain("--repo owner/name");
   });
 });
 
