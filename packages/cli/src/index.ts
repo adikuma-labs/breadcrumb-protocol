@@ -921,7 +921,7 @@ function assertSafeTaskId(id: string): void {
 
 const DEFAULT_API_URL = "https://app.breadcrumb.run";
 
-// only what a browser plays without a plugin, matching the server allowlist
+// only what a browser plays without a plugin
 const CONTENT_TYPES: Record<string, string> = {
   ".png": "image/png",
   ".jpg": "image/jpeg",
@@ -937,7 +937,7 @@ type EvidenceReservation = {
   uploadHeaders: Record<string, string>;
 };
 
-// a failure the user can act on, as opposed to a crash
+// a failure the user can act on rather than a crash
 class EvidenceError extends Error {}
 
 function fail(message: string): never {
@@ -962,7 +962,7 @@ async function runEvidenceCommand(
     return;
   }
 
-  // matched by position, since a caption can be the same text as the filename
+  // matched by position because a caption can repeat the filename
   const file = rest.find((arg, index) => {
     if (arg.startsWith("-")) {
       return false;
@@ -1011,8 +1011,7 @@ async function addEvidence(
     fail(`${input.taskId} is not a valid task id. use letters numbers dots dashes or underscores`);
   }
 
-  // everything checkable without credentials is checked first, so a typo in the
-  // task name never reports itself as a missing api key
+  // local checks run first so a typo does not report as a missing key
   const reviewPath = path.join(cwd, BREADCRUMB_DIR, TASKS_DIR, input.taskId, REVIEW_FILE);
   if (!(await fileExists(reviewPath))) {
     fail(
@@ -1058,8 +1057,7 @@ async function addEvidence(
 
   output.stdout.push(`uploaded ${reservation.id}`);
 
-  // the bytes are safely stored by this point, so a failure here is a bookkeeping
-  // problem and must not be reported as a failed upload
+  // the bytes are stored by now so this is only a bookkeeping failure
   try {
     await recordEvidence(reviewPath, reservation.id, input.caption);
   } catch (error) {
@@ -1159,8 +1157,7 @@ async function reserveEvidence(
     body: JSON.stringify(body),
   });
 
-  // reserve is the first authenticated call, so a bad key is caught here
-  // without spending a separate round trip on whoami
+  // reserve is the first authenticated call so a bad key is caught here
   if (response.status === 401) {
     fail("that api key was rejected. check it has not been revoked in settings");
   }
@@ -1192,8 +1189,7 @@ async function uploadBytes(
   reservation: EvidenceReservation,
   bytes: Buffer,
 ): Promise<void> {
-  // a view over the same memory rather than a copy, which would double peak
-  // usage on a fifty megabyte recording
+  // a view over the same memory so a large upload is not copied twice
   const body = new Uint8Array(
     bytes.buffer as ArrayBuffer,
     bytes.byteOffset,
@@ -1213,8 +1209,7 @@ async function uploadBytes(
   }
 }
 
-// confirm answers 409 both when nothing landed and when it already succeeded so
-// a timed out retry has to ask what the truth is rather than assume failure
+// confirm answers 409 for both no bytes and already confirmed
 async function confirmUpload(key: string, id: string): Promise<void> {
   const response = await request(evidenceUrl(id), {
     method: "POST",
@@ -1267,8 +1262,7 @@ export async function recordEvidence(
   const source = await readFile(reviewPath, "utf8");
   const doc = parseDocument(source);
 
-  // parseDocument collects errors rather than throwing, and writing the partial
-  // document back would quietly destroy whatever it failed to understand
+  // parseDocument collects errors so writing back would destroy them
   if (doc.errors.length > 0) {
     fail(`could not parse ${reviewPath}: ${doc.errors[0]?.message}. fix the yaml then re-run`);
   }

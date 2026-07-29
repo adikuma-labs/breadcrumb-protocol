@@ -52,13 +52,11 @@ const reviewSequenceSectionSchema = z
   })
   .strict();
 
-// only the handle and the caption, everything else about an upload lives on the
-// server and would drift the moment it changed
+// only the handle and the caption because the rest lives on the server
 export const evidenceSchema = z
   .object({
     id: z.string().min(1, "id is required"),
-    // matches the server cap so a hand edited caption cannot pass check and
-    // then be refused on upload
+    // matches the server cap so check and upload agree
     caption: z.string().min(1).max(200).optional(),
   })
   .strict();
