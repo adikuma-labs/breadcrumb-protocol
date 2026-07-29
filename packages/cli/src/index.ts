@@ -1037,6 +1037,9 @@ async function addEvidence(
     fail(`${input.file} is empty`);
   }
 
+  // checked before the upload so a broken handoff never orphans stored bytes
+  await assertHandoffWritable(reviewPath);
+
   const repoFullName = input.repo ?? (await detectRepoFullName(cwd));
 
   const key = process.env.BREADCRUMB_API_KEY;
@@ -1101,7 +1104,7 @@ async function detectRepoFullName(cwd: string): Promise<string> {
 
 // accepts the ssh scp and https remote spellings github hands out
 export function parseGithubRemote(url: string): string | null {
-  // a pasted browser url often carries a trailing slash or a /tree/main tail
+  // a pasted browser url often carries a trailing slash
   const trimmed = url.trim().replace(/\/+$/, "").replace(/\.git$/, "");
   const patterns = [
     /^git@github\.com:([^/]+)\/([^/]+)$/,
@@ -1134,7 +1137,10 @@ async function request(url: string, init: RequestInit): Promise<Response> {
   try {
     return await fetch(url, init);
   } catch {
-    fail(`could not reach ${apiBase()}. check your connection or BREADCRUMB_API_URL`);
+    // storage lives on another host so it must not be blamed on the api url
+    const target = URL.canParse(url) ? new URL(url).origin : url;
+    const hint = url.startsWith(apiBase()) ? " or BREADCRUMB_API_URL" : "";
+    fail(`could not reach ${target}. check your connection${hint}`);
   }
 }
 
@@ -1253,6 +1259,21 @@ async function isAlreadyUploaded(key: string, id: string): Promise<boolean> {
   }
 }
 
+// proves the handoff can take a handle before anything is uploaded
+export async function assertHandoffWritable(reviewPath: string): Promise<void> {
+  const doc = parseDocument(await readFile(reviewPath, "utf8"));
+
+  if (doc.errors.length > 0) {
+    fail(`could not parse ${reviewPath}. fix the yaml then re-run`);
+  }
+
+  const existing = doc.get("evidence");
+
+  if (existing !== null && existing !== undefined && !isSeq(existing)) {
+    fail("evidence in review.yml is not a list. fix it then re-run");
+  }
+}
+
 // appends the handle without reformatting the handoff or dropping its comments
 export async function recordEvidence(
   reviewPath: string,
@@ -1264,7 +1285,7 @@ export async function recordEvidence(
 
   // parseDocument collects errors so writing back would destroy them
   if (doc.errors.length > 0) {
-    fail(`could not parse ${reviewPath}: ${doc.errors[0]?.message}. fix the yaml then re-run`);
+    fail(`could not parse ${reviewPath}`);
   }
 
   const entry: Record<string, string> = { id };
@@ -1280,7 +1301,7 @@ export async function recordEvidence(
   } else if (existing === null || existing === undefined) {
     doc.set("evidence", doc.createNode([entry]));
   } else {
-    fail("evidence in review.yml is not a list. fix it then re-run");
+    fail("evidence in review.yml is not a list");
   }
 
   await writeFile(reviewPath, doc.toString(), "utf8");

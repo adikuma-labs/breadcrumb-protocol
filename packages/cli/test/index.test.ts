@@ -214,6 +214,24 @@ describe("evidence add failures", () => {
     expect(result.stderr.join(" ")).toContain("--repo owner/name");
   });
 
+  it("refuses a broken handoff before it uploads anything", async () => {
+    const cwd = await createRepo();
+    await initProject(cwd, { agents: [] }, createOutput());
+    await createTask(cwd, "demo", createOutput());
+    await writeFile(path.join(cwd, "shot.png"), "x", "utf8");
+    await writeFile(
+      path.join(cwd, ".breadcrumb", "tasks", "demo", "review.yml"),
+      "version: 1\nid: demo\nevidence:\n  id: wrong-shape\n",
+      "utf8",
+    );
+
+    const result = await runCli(["evidence", "add", "./shot.png", "--task", "demo"], cwd);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr.join(" ")).toContain("not a list");
+    expect(result.stderr.join(" ")).not.toContain("uploaded");
+  });
+
   it("rejects a task id that tries to climb out of the tasks folder", async () => {
     const cwd = await createRepo();
     await initProject(cwd, { agents: [] }, createOutput());
