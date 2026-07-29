@@ -102,6 +102,13 @@ describe("parseGithubRemote", () => {
     expect(parseGithubRemote("git@bitbucket.org:a/b.git")).toBeNull();
     expect(parseGithubRemote("not a url")).toBeNull();
   });
+
+  it("tolerates a trailing slash and refuses a browser deep link", () => {
+    expect(parseGithubRemote("https://github.com/adikuma/breadcrumb-lab/")).toBe(
+      "adikuma/breadcrumb-lab",
+    );
+    expect(parseGithubRemote("https://github.com/adikuma/breadcrumb-lab/tree/main")).toBeNull();
+  });
 });
 
 describe("recordEvidence", () => {
@@ -138,6 +145,26 @@ describe("recordEvidence", () => {
     expect(next).toContain("ev_second");
   });
 
+  it("refuses to rewrite a handoff it could not parse", async () => {
+    const cwd = await mkdtemp(path.join(os.tmpdir(), "breadcrumb-yaml-"));
+    const file = path.join(cwd, "review.yml");
+    const broken = "version: 1\nid: demo\n  bad: [unclosed\n";
+    await writeFile(file, broken, "utf8");
+
+    await expect(recordEvidence(file, "ev_abc", undefined)).rejects.toThrow();
+    expect(await readFile(file, "utf8")).toBe(broken);
+  });
+
+  it("refuses when evidence exists but is not a list", async () => {
+    const cwd = await mkdtemp(path.join(os.tmpdir(), "breadcrumb-yaml-"));
+    const file = path.join(cwd, "review.yml");
+    const source = "version: 1\nid: demo\nevidence:\n  id: ev_wrong_shape\n";
+    await writeFile(file, source, "utf8");
+
+    await expect(recordEvidence(file, "ev_abc", undefined)).rejects.toThrow(/not a list/);
+    expect(await readFile(file, "utf8")).toBe(source);
+  });
+
   it("writes no caption key when there is no caption", async () => {
     const cwd = await mkdtemp(path.join(os.tmpdir(), "breadcrumb-yaml-"));
     const file = path.join(cwd, "review.yml");
@@ -170,6 +197,31 @@ describe("evidence add failures", () => {
 
     expect(result.exitCode).toBe(1);
     expect(result.stderr.join(" ")).toContain("png jpeg webp mp4 or webm");
+  });
+
+  it("finds the file even when the caption repeats its name", async () => {
+    const cwd = await createRepo();
+    await initProject(cwd, { agents: [] }, createOutput());
+    await createTask(cwd, "demo", createOutput());
+    await writeFile(path.join(cwd, "shot.png"), "x", "utf8");
+
+    const result = await runCli(
+      ["evidence", "add", "--caption", "shot.png", "shot.png", "--task", "demo"],
+      cwd,
+    );
+
+    // it should get as far as needing a remote, not claim the file is missing
+    expect(result.stderr.join(" ")).toContain("--repo owner/name");
+  });
+
+  it("rejects a task id that tries to climb out of the tasks folder", async () => {
+    const cwd = await createRepo();
+    await initProject(cwd, { agents: [] }, createOutput());
+
+    const result = await runCli(["evidence", "add", "./x.png", "--task", "../../etc"], cwd);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr.join(" ")).toContain("not a valid task id");
   });
 
   it("asks for --repo when there is no remote to read", async () => {

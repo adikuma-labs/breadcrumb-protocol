@@ -962,7 +962,14 @@ async function runEvidenceCommand(
     return;
   }
 
-  const file = rest.find((arg) => !arg.startsWith("-") && !isFlagValue(rest, arg));
+  // matched by position, since a caption can be the same text as the filename
+  const file = rest.find((arg, index) => {
+    if (arg.startsWith("-")) {
+      return false;
+    }
+    const previous = index > 0 ? rest[index - 1] : undefined;
+    return !(previous?.startsWith("--") && !previous.includes("="));
+  });
 
   try {
     await addEvidence(
@@ -983,13 +990,6 @@ async function runEvidenceCommand(
   }
 }
 
-// a positional is only a file when it is not the value that follows a flag
-function isFlagValue(args: string[], candidate: string): boolean {
-  const index = args.indexOf(candidate);
-  const previous = index > 0 ? args[index - 1] : undefined;
-  return previous !== undefined && previous.startsWith("--") && !previous.includes("=");
-}
-
 // uploads one file and records the handle in the task handoff
 async function addEvidence(
   input: {
@@ -1006,6 +1006,9 @@ async function addEvidence(
   }
   if (!input.taskId) {
     fail("missing --task. name the task this evidence belongs to");
+  }
+  if (!isSafeTaskId(input.taskId)) {
+    fail(`${input.taskId} is not a valid task id. use letters numbers dots dashes or underscores`);
   }
 
   // everything checkable without credentials is checked first, so a typo in the
@@ -1042,9 +1045,6 @@ async function addEvidence(
     fail("no api key. create one in breadcrumb settings then export BREADCRUMB_API_KEY");
   }
 
-  // a bad key fails here rather than halfway through an upload
-  await verifyKey(key);
-
   const reservation = await reserveEvidence(key, {
     repoFullName,
     taskId: input.taskId,
@@ -1058,7 +1058,17 @@ async function addEvidence(
 
   output.stdout.push(`uploaded ${reservation.id}`);
 
-  await recordEvidence(reviewPath, reservation.id, input.caption);
+  // the bytes are safely stored by this point, so a failure here is a bookkeeping
+  // problem and must not be reported as a failed upload
+  try {
+    await recordEvidence(reviewPath, reservation.id, input.caption);
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    fail(
+      `uploaded ${reservation.id} but could not record it: ${reason}. add it under evidence: by hand`,
+    );
+  }
+
   output.stdout.push(
     `recorded in ${BREADCRUMB_DIR}/${TASKS_DIR}/${input.taskId}/${REVIEW_FILE}`,
   );
@@ -1093,11 +1103,12 @@ async function detectRepoFullName(cwd: string): Promise<string> {
 
 // accepts the ssh scp and https remote spellings github hands out
 export function parseGithubRemote(url: string): string | null {
-  const trimmed = url.trim().replace(/\.git$/, "");
+  // a pasted browser url often carries a trailing slash or a /tree/main tail
+  const trimmed = url.trim().replace(/\/+$/, "").replace(/\.git$/, "");
   const patterns = [
-    /^git@github\.com:([^/]+)\/(.+)$/,
-    /^ssh:\/\/git@github\.com\/([^/]+)\/(.+)$/,
-    /^https?:\/\/(?:[^@/]+@)?github\.com\/([^/]+)\/(.+)$/,
+    /^git@github\.com:([^/]+)\/([^/]+)$/,
+    /^ssh:\/\/git@github\.com\/([^/]+)\/([^/]+)$/,
+    /^https?:\/\/(?:[^@/]+@)?github\.com\/([^/]+)\/([^/]+)$/,
   ];
 
   for (const pattern of patterns) {
@@ -1120,16 +1131,12 @@ async function readApiError(response: Response, fallback: string): Promise<strin
   }
 }
 
-async function verifyKey(key: string): Promise<void> {
-  const response = await fetch(`${apiBase()}/api/v1/whoami`, {
-    headers: { authorization: `Bearer ${key}` },
-  });
-
-  if (response.status === 401) {
-    fail("that api key was rejected. check it has not been revoked in settings");
-  }
-  if (!response.ok) {
-    fail(await readApiError(response, "breadcrumb could not verify the api key"));
+// a dead network otherwise surfaces as a bare TypeError with no next step
+async function request(url: string, init: RequestInit): Promise<Response> {
+  try {
+    return await fetch(url, init);
+  } catch {
+    fail(`could not reach ${apiBase()}. check your connection or BREADCRUMB_API_URL`);
   }
 }
 
@@ -1143,7 +1150,7 @@ async function reserveEvidence(
     caption?: string | undefined;
   },
 ): Promise<EvidenceReservation> {
-  const response = await fetch(`${apiBase()}/api/v1/evidence`, {
+  const response = await request(`${apiBase()}/api/v1/evidence`, {
     method: "POST",
     headers: {
       authorization: `Bearer ${key}`,
@@ -1152,6 +1159,11 @@ async function reserveEvidence(
     body: JSON.stringify(body),
   });
 
+  // reserve is the first authenticated call, so a bad key is caught here
+  // without spending a separate round trip on whoami
+  if (response.status === 401) {
+    fail("that api key was rejected. check it has not been revoked in settings");
+  }
   if (response.status === 403) {
     fail(
       `breadcrumb cannot see ${body.repoFullName}. add it to your repositories, or pass --repo if this remote is a fork`,
@@ -1180,10 +1192,17 @@ async function uploadBytes(
   reservation: EvidenceReservation,
   bytes: Buffer,
 ): Promise<void> {
-  const response = await fetch(reservation.uploadUrl, {
+  // a view over the same memory rather than a copy, which would double peak
+  // usage on a fifty megabyte recording
+  const body = new Uint8Array(
+    bytes.buffer as ArrayBuffer,
+    bytes.byteOffset,
+    bytes.byteLength,
+  );
+  const response = await request(reservation.uploadUrl, {
     method: "PUT",
     headers: reservation.uploadHeaders,
-    body: new Uint8Array(bytes),
+    body,
   });
 
   if (response.status === 403) {
@@ -1197,7 +1216,7 @@ async function uploadBytes(
 // confirm answers 409 both when nothing landed and when it already succeeded so
 // a timed out retry has to ask what the truth is rather than assume failure
 async function confirmUpload(key: string, id: string): Promise<void> {
-  const response = await fetch(`${apiBase()}/api/v1/evidence/${id}`, {
+  const response = await request(evidenceUrl(id), {
     method: "POST",
     headers: { authorization: `Bearer ${key}` },
   });
@@ -1206,18 +1225,25 @@ async function confirmUpload(key: string, id: string): Promise<void> {
     return;
   }
 
-  if (response.status === 409 && (await isAlreadyUploaded(key, id))) {
-    return;
+  if (response.status === 409) {
+    if (await isAlreadyUploaded(key, id)) {
+      return;
+    }
+    fail(`the upload did not arrive (${id}). re-run the command`);
   }
 
   fail(
-    `the upload did not arrive (${id}). re-run the command`,
+    `${await readApiError(response, `could not confirm the upload (${response.status})`)} (${id}). re-run the command`,
   );
+}
+
+function evidenceUrl(id: string): string {
+  return `${apiBase()}/api/v1/evidence/${encodeURIComponent(id)}`;
 }
 
 async function isAlreadyUploaded(key: string, id: string): Promise<boolean> {
   try {
-    const response = await fetch(`${apiBase()}/api/v1/evidence/${id}`, {
+    const response = await fetch(evidenceUrl(id), {
       headers: { authorization: `Bearer ${key}` },
     });
 
@@ -1240,6 +1266,13 @@ export async function recordEvidence(
 ): Promise<void> {
   const source = await readFile(reviewPath, "utf8");
   const doc = parseDocument(source);
+
+  // parseDocument collects errors rather than throwing, and writing the partial
+  // document back would quietly destroy whatever it failed to understand
+  if (doc.errors.length > 0) {
+    fail(`could not parse ${reviewPath}: ${doc.errors[0]?.message}. fix the yaml then re-run`);
+  }
+
   const entry: Record<string, string> = { id };
 
   if (caption) {
@@ -1250,8 +1283,10 @@ export async function recordEvidence(
 
   if (isSeq(existing)) {
     existing.add(doc.createNode(entry));
-  } else {
+  } else if (existing === null || existing === undefined) {
     doc.set("evidence", doc.createNode([entry]));
+  } else {
+    fail("evidence in review.yml is not a list. fix it then re-run");
   }
 
   await writeFile(reviewPath, doc.toString(), "utf8");

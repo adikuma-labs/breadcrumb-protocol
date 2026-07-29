@@ -57,7 +57,9 @@ const reviewSequenceSectionSchema = z
 export const evidenceSchema = z
   .object({
     id: z.string().min(1, "id is required"),
-    caption: z.string().min(1).optional(),
+    // matches the server cap so a hand edited caption cannot pass check and
+    // then be refused on upload
+    caption: z.string().min(1).max(200).optional(),
   })
   .strict();
 
