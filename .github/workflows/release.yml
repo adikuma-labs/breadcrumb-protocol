@@ -1,0 +1,58 @@
+name: release
+
+# one tag names one package
+on:
+  push:
+    tags:
+      - "cli-v*"
+      - "protocol-v*"
+
+permissions:
+  contents: read
+  # npm trusted publishing swaps this for a short lived token
+  id-token: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      - run: corepack enable
+
+      # pnpm publish cannot do oidc on pnpm 11 so npm does the publishing and
+      # needs to be new enough to understand it
+      - run: npm install --global npm@latest
+
+      - run: corepack pnpm install --frozen-lockfile
+      - run: corepack pnpm build
+      - run: corepack pnpm test
+      - run: corepack pnpm smoke
+
+      # a tag that disagrees with package.json fails here rather than shipping
+      # the wrong version
+      - name: resolve the tagged package
+        id: pkg
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          case "$tag" in
+            cli-v*) dir="packages/cli"; tagged="${tag#cli-v}" ;;
+            protocol-v*) dir="packages/protocol"; tagged="${tag#protocol-v}" ;;
+            *) echo "unrecognised tag $tag"; exit 1 ;;
+          esac
+          actual="$(node -p "require('./$dir/package.json').version")"
+          if [ "$tagged" != "$actual" ]; then
+            echo "tag $tag does not match the $actual in $dir/package.json"
+            exit 1
+          fi
+          echo "dir=$dir" >> "$GITHUB_OUTPUT"
+          echo "publishing $dir at $actual"
+
+      - name: publish
+        working-directory: ${{ steps.pkg.outputs.dir }}
+        run: |
+          corepack pnpm pack --pack-destination .
+          npm publish ./*.tgz --access public
