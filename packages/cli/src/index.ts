@@ -30,6 +30,17 @@ const AGENTS_FILE = "AGENTS.md";
 const CLAUDE_FILE = "CLAUDE.md";
 const BREADCRUMB_START = "<!-- breadcrumb:start -->";
 const BREADCRUMB_END = "<!-- breadcrumb:end -->";
+const DEFAULT_API_URL = "https://app.breadcrumb.run";
+
+// only what a browser plays without a plugin
+const CONTENT_TYPES: Record<string, string> = {
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".webp": "image/webp",
+  ".mp4": "video/mp4",
+  ".webm": "video/webm",
+};
 
 export type CliResult = {
   exitCode: number;
@@ -74,6 +85,19 @@ type GitNameStatus = {
   path: string;
   previousPath?: string;
 };
+
+type EvidenceReservation = {
+  id: string;
+  uploadUrl: string;
+  uploadHeaders: Record<string, string>;
+};
+
+// a failure the user can act on rather than a crash
+class EvidenceError extends Error {}
+
+function fail(message: string): never {
+  throw new EvidenceError(message);
+}
 
 // runs the breadcrumb cli and returns captured output
 export async function runCli(args: string[], cwd = process.cwd()): Promise<CliResult> {
@@ -917,31 +941,6 @@ function assertSafeTaskId(id: string): void {
   if (!isSafeTaskId(id)) {
     throw new Error("task id must be a safe path segment");
   }
-}
-
-const DEFAULT_API_URL = "https://app.breadcrumb.run";
-
-// only what a browser plays without a plugin
-const CONTENT_TYPES: Record<string, string> = {
-  ".png": "image/png",
-  ".jpg": "image/jpeg",
-  ".jpeg": "image/jpeg",
-  ".webp": "image/webp",
-  ".mp4": "video/mp4",
-  ".webm": "video/webm",
-};
-
-type EvidenceReservation = {
-  id: string;
-  uploadUrl: string;
-  uploadHeaders: Record<string, string>;
-};
-
-// a failure the user can act on rather than a crash
-class EvidenceError extends Error {}
-
-function fail(message: string): never {
-  throw new EvidenceError(message);
 }
 
 function apiBase(): string {
