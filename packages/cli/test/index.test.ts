@@ -21,6 +21,7 @@ import {
 
 const execFileAsync = promisify(execFile);
 
+const BREADCRUMB_TASKS = ".breadcrumb/tasks";
 const CLAUDE_SKILL = ".claude/skills/breadcrumb-handoff/SKILL.md";
 const CODEX_SKILL = ".codex/skills/breadcrumb-handoff/SKILL.md";
 const AGENTS_SKILL = ".agents/skills/breadcrumb-handoff/SKILL.md";
@@ -84,6 +85,98 @@ describe("default branch detection", () => {
     await initProject(cwd, { agents: [] }, createOutput());
 
     expect(await read(cwd, ".breadcrumb/config.yml")).toContain("default_branch: trunk");
+  });
+});
+
+describe("runCli update", () => {
+  it("reports everything current right after init", async () => {
+    const cwd = await createRepo();
+    await initProject(cwd, { agents: ["claude"] }, createOutput());
+
+    const result = await runCli(["update"], cwd);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.join(" ")).toContain("already current");
+  });
+
+  it("upgrades a legacy block with no hash and keeps the prose around it", async () => {
+    const cwd = await createRepo();
+    await mkdir(path.join(cwd, BREADCRUMB_TASKS), { recursive: true });
+    const head = "# AGENTS.md\n\nmine before.\n\n";
+    const tail = "\n\nmine after.\n";
+    await writeFile(
+      path.join(cwd, "AGENTS.md"),
+      `${head}<!-- breadcrumb:start -->\nold text\n<!-- breadcrumb:end -->${tail}`,
+      "utf8",
+    );
+
+    await runCli(["update"], cwd);
+
+    const next = await read(cwd, "AGENTS.md");
+    expect(next.startsWith(head)).toBe(true);
+    expect(next.endsWith(tail)).toBe(true);
+    expect(next).toMatch(/breadcrumb:start [0-9a-f]{8}/);
+    expect(next.match(/breadcrumb:start/g)?.length).toBe(1);
+  });
+
+  it("refuses to overwrite an edit inside the block", async () => {
+    const cwd = await createRepo();
+    await initProject(cwd, { agents: [] }, createOutput());
+    const edited = (await read(cwd, "AGENTS.md")).replace("Breadcrumb helps", "MINE Breadcrumb helps");
+    await writeFile(path.join(cwd, "AGENTS.md"), edited, "utf8");
+
+    const result = await runCli(["update"], cwd);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr.join(" ")).toContain("--force");
+    expect(await read(cwd, "AGENTS.md")).toBe(edited);
+  });
+
+  it("replaces that edit when forced", async () => {
+    const cwd = await createRepo();
+    await initProject(cwd, { agents: [] }, createOutput());
+    const edited = (await read(cwd, "AGENTS.md")).replace("Breadcrumb helps", "MINE Breadcrumb helps");
+    await writeFile(path.join(cwd, "AGENTS.md"), edited, "utf8");
+
+    const result = await runCli(["update", "--force"], cwd);
+
+    expect(result.exitCode).toBe(0);
+    expect(await read(cwd, "AGENTS.md")).not.toContain("MINE");
+  });
+
+  it("only touches agents that are already installed", async () => {
+    const cwd = await createRepo();
+    await initProject(cwd, { agents: ["claude"] }, createOutput());
+
+    await runCli(["update"], cwd);
+
+    expect(await exists(path.join(cwd, CLAUDE_SKILL))).toBe(true);
+    expect(await exists(path.join(cwd, CODEX_SKILL))).toBe(false);
+    expect(await exists(path.join(cwd, AGENTS_SKILL))).toBe(false);
+  });
+
+  it("asks for init when there is no breadcrumb folder", async () => {
+    const cwd = await createRepo();
+
+    const result = await runCli(["update"], cwd);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr.join(" ")).toContain("breadcrumb init");
+  });
+});
+
+describe("task new template", () => {
+  it("prefers the repo template so editing it changes new tasks", async () => {
+    const cwd = await createRepo();
+    await initProject(cwd, { agents: [] }, createOutput());
+    const templatePath = path.join(cwd, ".breadcrumb", "templates", "review.yml");
+    await writeFile(templatePath, "version: 1\nid: task-id\ntitle: MY HOUSE STYLE\n", "utf8");
+
+    await createTask(cwd, "demo", createOutput());
+
+    const task = await read(cwd, ".breadcrumb/tasks/demo/review.yml");
+    expect(task).toContain("MY HOUSE STYLE");
+    expect(task).toContain("id: demo");
   });
 });
 

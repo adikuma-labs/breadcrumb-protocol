@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
 import { constants, realpathSync } from "node:fs";
 import { access, appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -28,8 +29,11 @@ const REVIEW_FILE = "review.yml";
 const CONFIG_FILE = "config.yml";
 const AGENTS_FILE = "AGENTS.md";
 const CLAUDE_FILE = "CLAUDE.md";
-const BREADCRUMB_START = "<!-- breadcrumb:start -->";
 const BREADCRUMB_END = "<!-- breadcrumb:end -->";
+
+// matches the legacy marker and the hashed one so old repos still upgrade
+const MANAGED_BLOCK =
+  /<!-- breadcrumb:start(?: ([0-9a-f]{8}))? -->\r?\n?([\s\S]*?)\r?\n?<!-- breadcrumb:end -->/;
 const DEFAULT_API_URL = "https://app.breadcrumb.run";
 
 // only what a browser plays without a plugin
@@ -86,6 +90,8 @@ type GitNameStatus = {
   previousPath?: string;
 };
 
+type BlockOutcome = "created" | "appended" | "replaced" | "current" | "edited";
+
 type EvidenceReservation = {
   id: string;
   uploadUrl: string;
@@ -120,6 +126,11 @@ export async function runCli(args: string[], cwd = process.cwd()): Promise<CliRe
       const promptable = getFlagValue(parsed.rest, "--agent") === undefined;
       const workflow = await resolveWorkflow(parsed.flags, promptable);
       await initProject(cwd, { agents, workflow }, output);
+      return output;
+    }
+
+    if (parsed.command === "update") {
+      await updateProject(cwd, { force: parsed.flags.has("force") }, output);
       return output;
     }
 
@@ -235,12 +246,9 @@ export async function initProject(
   output.stdout.push(`created ${BREADCRUMB_DIR}/${TEMPLATES_DIR}/${REVIEW_FILE}`);
 
   // AGENTS.md always holds the contract as the single source of truth
-  await upsertManagedBlock(
-    path.join(cwd, AGENTS_FILE),
-    getBreadcrumbInstructions(),
-    BREADCRUMB_START,
-    BREADCRUMB_END,
-  );
+  await upsertManagedBlock(path.join(cwd, AGENTS_FILE), getBreadcrumbInstructions(), {
+    force: true,
+  });
   output.stdout.push(`updated ${AGENTS_FILE}`);
 
   // claude does not read AGENTS.md so bridge it with an import when claude is
@@ -281,22 +289,56 @@ async function writeSkills(
   agents: AgentTarget[],
   output: CliResult,
 ): Promise<void> {
-  const skill = getHandoffSkill();
+  for (const skillRelative of skillPathsFor(agents)) {
+    await writeSkillFile(cwd, skillRelative, output);
+  }
+}
+
+// the skill paths a set of agents maps to with duplicates removed
+function skillPathsFor(agents: AgentTarget[]): string[] {
   const seen = new Set<string>();
 
   for (const agent of agents) {
     for (const dir of SKILL_DIRS[agent]) {
-      const skillRelative = `${dir}/${SKILL_NAME}/SKILL.md`;
-      if (seen.has(skillRelative)) {
-        continue;
-      }
-      seen.add(skillRelative);
-      const target = path.join(cwd, dir, SKILL_NAME, "SKILL.md");
-      await mkdir(path.dirname(target), { recursive: true });
-      await writeFile(target, skill, "utf8");
-      output.stdout.push(`created ${skillRelative}`);
+      seen.add(`${dir}/${SKILL_NAME}/SKILL.md`);
     }
   }
+
+  return [...seen];
+}
+
+// the skill paths already installed in this repo whatever agent put them there
+async function installedSkillPaths(cwd: string): Promise<string[]> {
+  const every = skillPathsFor(["claude", "codex", "opencode"]);
+  const found: string[] = [];
+
+  for (const skillRelative of every) {
+    if (await fileExists(path.join(cwd, skillRelative))) {
+      found.push(skillRelative);
+    }
+  }
+
+  return found;
+}
+
+// writes one skill file and reports what actually changed
+async function writeSkillFile(
+  cwd: string,
+  skillRelative: string,
+  output: CliResult,
+): Promise<void> {
+  const skill = getHandoffSkill();
+  const target = path.join(cwd, skillRelative);
+  const existed = await fileExists(target);
+
+  if (existed && (await readFile(target, "utf8")) === skill) {
+    output.stdout.push(`${skillRelative} already current`);
+    return;
+  }
+
+  await mkdir(path.dirname(target), { recursive: true });
+  await writeFile(target, skill, "utf8");
+  output.stdout.push(`${existed ? "updated" : "created"} ${skillRelative}`);
 }
 
 // ensures CLAUDE.md imports AGENTS.md since claude does not read it directly
@@ -330,8 +372,20 @@ export async function createTask(cwd: string, id: string, output: CliResult): Pr
     throw new Error(`${BREADCRUMB_DIR}/${TASKS_DIR}/${id}/${REVIEW_FILE} already exists`);
   }
 
-  await writeFile(reviewPath, getTaskTemplate(id), "utf8");
+  await writeFile(reviewPath, await readTaskTemplate(cwd, id), "utf8");
   output.stdout.push(`created ${BREADCRUMB_DIR}/${TASKS_DIR}/${id}/${REVIEW_FILE}`);
+}
+
+// prefers the repo's own template so editing it actually changes new tasks
+async function readTaskTemplate(cwd: string, id: string): Promise<string> {
+  const templatePath = path.join(cwd, BREADCRUMB_DIR, TEMPLATES_DIR, REVIEW_FILE);
+
+  if (await fileExists(templatePath)) {
+    const template = await readFile(templatePath, "utf8");
+    return template.replace("id: task-id", `id: ${id}`);
+  }
+
+  return getTaskTemplate(id);
 }
 
 // validates a task handoff and compares it with the local git diff
@@ -440,6 +494,56 @@ function parseArgs(args: string[]): ParsedArgs {
     rest,
     flags,
   };
+}
+
+// refreshes the files breadcrumb owns in a repo that already ran init
+export async function updateProject(
+  cwd: string,
+  opts: { force?: boolean },
+  output: CliResult,
+): Promise<void> {
+  if (!(await fileExists(path.join(cwd, BREADCRUMB_DIR)))) {
+    output.exitCode = 1;
+    output.stderr.push("no .breadcrumb here. run breadcrumb init first");
+    return;
+  }
+
+  const outcome = await upsertManagedBlock(
+    path.join(cwd, AGENTS_FILE),
+    getBreadcrumbInstructions(),
+    { force: opts.force ?? false },
+  );
+
+  if (outcome === "edited") {
+    output.exitCode = 1;
+    output.stderr.push(
+      `${AGENTS_FILE} was edited inside the breadcrumb block so it was left alone. git has your version. re-run with --force to replace it`,
+    );
+  } else if (outcome === "current") {
+    output.stdout.push(`${AGENTS_FILE} already current`);
+  } else {
+    output.stdout.push(`${outcome} the breadcrumb block in ${AGENTS_FILE}`);
+  }
+
+  const claudePath = path.join(cwd, CLAUDE_FILE);
+  if (await fileExists(claudePath)) {
+    const changed = await ensureClaudeImport(claudePath);
+    output.stdout.push(
+      changed ? `updated ${CLAUDE_FILE}` : `${CLAUDE_FILE} already imports ${AGENTS_FILE}`,
+    );
+  }
+
+  // only the agents already set up get touched so update never adopts a new one
+  const installed = await installedSkillPaths(cwd);
+
+  if (installed.length === 0) {
+    output.stdout.push("no handoff skill installed. run breadcrumb init --agent to add one");
+    return;
+  }
+
+  for (const skillRelative of installed) {
+    await writeSkillFile(cwd, skillRelative, output);
+  }
 }
 
 // dispatches the task subcommands
@@ -886,30 +990,51 @@ function mapGitStatus(status: string): ChangedFileStatus {
   return "changed";
 }
 
+// a short fingerprint of the block so an edit inside it can be spotted later
+function blockHash(block: string): string {
+  return createHash("sha256").update(block.trim(), "utf8").digest("hex").slice(0, 8);
+}
+
+function renderManagedBlock(block: string): string {
+  const trimmed = block.trim();
+  return `<!-- breadcrumb:start ${blockHash(trimmed)} -->\n${trimmed}\n${BREADCRUMB_END}`;
+}
+
 // inserts or replaces a managed markdown block
 async function upsertManagedBlock(
   filePath: string,
   block: string,
-  startMarker: string,
-  endMarker: string,
-): Promise<void> {
-  const managedBlock = `${startMarker}\n${block.trim()}\n${endMarker}`;
+  opts: { force?: boolean } = {},
+): Promise<BlockOutcome> {
+  const managedBlock = renderManagedBlock(block);
 
   if (!(await fileExists(filePath))) {
     await writeFile(filePath, `${getTitleForFile(filePath)}\n\n${managedBlock}\n`, "utf8");
-    return;
+    return "created";
   }
 
   const source = await readFile(filePath, "utf8");
-  const existing = new RegExp(
-    `${escapeRegExp(startMarker)}[\\s\\S]*?${escapeRegExp(endMarker)}`,
-    "m",
-  );
-  const next = existing.test(source)
-    ? source.replace(existing, managedBlock)
-    : `${source.trimEnd()}\n\n${managedBlock}\n`;
+  const match = source.match(MANAGED_BLOCK);
 
+  if (!match) {
+    const appended = `${source.trimEnd()}\n\n${managedBlock}\n`;
+    await writeFile(filePath, appended, "utf8");
+    return "appended";
+  }
+
+  const [found, recordedHash, currentBlock = ""] = match;
+
+  if (recordedHash && recordedHash !== blockHash(currentBlock) && !opts.force) {
+    return "edited";
+  }
+
+  if (currentBlock.trim() === block.trim()) {
+    return "current";
+  }
+
+  const next = source.replace(found, managedBlock);
   await writeFile(filePath, next.endsWith("\n") ? next : `${next}\n`, "utf8");
+  return "replaced";
 }
 
 // writes a file only when it does not already exist
@@ -1539,6 +1664,7 @@ function getHelpText(): string {
 
 commands:
   breadcrumb init [--agent claude,codex|none] [--workflow|--no-workflow]
+  breadcrumb update [--force]
   breadcrumb task new <id>
   breadcrumb check --task <id> [--json] [--strict] [--base <ref>]
   breadcrumb check --ci [--base <ref>]
