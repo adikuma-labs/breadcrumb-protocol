@@ -52,6 +52,15 @@ const reviewSequenceSectionSchema = z
   })
   .strict();
 
+// only the handle and the caption because the rest lives on the server
+export const evidenceSchema = z
+  .object({
+    id: z.string().min(1, "id is required"),
+    // matches the server cap so check and upload agree
+    caption: z.string().min(1).max(200).optional(),
+  })
+  .strict();
+
 export const breadcrumbReviewSchema = z
   .object({
     version: z.literal(BREADCRUMB_PROTOCOL_VERSION),
@@ -65,6 +74,7 @@ export const breadcrumbReviewSchema = z
       .array(reviewSequenceSectionSchema)
       .min(1, "review_sequence must include at least one section"),
     files: z.array(fileSchema).min(1, "files must include at least one file"),
+    evidence: z.array(evidenceSchema).optional(),
   })
   .strict()
   .superRefine((review, ctx) => {

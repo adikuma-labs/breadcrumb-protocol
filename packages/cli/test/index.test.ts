@@ -13,6 +13,8 @@ import {
   createTask,
   initProject,
   isCliEntryPoint,
+  parseGithubRemote,
+  recordEvidence,
   runCli,
   type CliResult,
 } from "../src/index";
@@ -82,6 +84,174 @@ describe("default branch detection", () => {
     await initProject(cwd, { agents: [] }, createOutput());
 
     expect(await read(cwd, ".breadcrumb/config.yml")).toContain("default_branch: trunk");
+  });
+});
+
+describe("parseGithubRemote", () => {
+  it("reads every spelling github hands out", () => {
+    const expected = "adikuma/breadcrumb-lab";
+    expect(parseGithubRemote("git@github.com:adikuma/breadcrumb-lab.git")).toBe(expected);
+    expect(parseGithubRemote("https://github.com/adikuma/breadcrumb-lab.git")).toBe(expected);
+    expect(parseGithubRemote("https://github.com/adikuma/breadcrumb-lab")).toBe(expected);
+    expect(parseGithubRemote("ssh://git@github.com/adikuma/breadcrumb-lab.git")).toBe(expected);
+    expect(parseGithubRemote("https://token@github.com/adikuma/breadcrumb-lab.git")).toBe(expected);
+  });
+
+  it("refuses hosts that are not github", () => {
+    expect(parseGithubRemote("https://gitlab.com/a/b.git")).toBeNull();
+    expect(parseGithubRemote("git@bitbucket.org:a/b.git")).toBeNull();
+    expect(parseGithubRemote("not a url")).toBeNull();
+  });
+
+  it("tolerates a trailing slash and refuses a browser deep link", () => {
+    expect(parseGithubRemote("https://github.com/adikuma/breadcrumb-lab/")).toBe(
+      "adikuma/breadcrumb-lab",
+    );
+    expect(parseGithubRemote("https://github.com/adikuma/breadcrumb-lab/tree/main")).toBeNull();
+  });
+});
+
+describe("recordEvidence", () => {
+  it("keeps comments and formatting in the handoff", async () => {
+    const cwd = await mkdtemp(path.join(os.tmpdir(), "breadcrumb-yaml-"));
+    const file = path.join(cwd, "review.yml");
+    const source = [
+      "version: 1",
+      "# this comment must survive",
+      "id: demo",
+      "title: A change",
+      "user_goal: Something the user asked for.",
+      "",
+    ].join("\n");
+    await writeFile(file, source, "utf8");
+
+    await recordEvidence(file, "ev_abc123", "the picker updates the total");
+
+    const next = await readFile(file, "utf8");
+    expect(next).toContain("# this comment must survive");
+    expect(next).toContain("ev_abc123");
+    expect(next).toContain("the picker updates the total");
+  });
+
+  it("appends to an existing list rather than replacing it", async () => {
+    const cwd = await mkdtemp(path.join(os.tmpdir(), "breadcrumb-yaml-"));
+    const file = path.join(cwd, "review.yml");
+    await writeFile(file, "version: 1\nid: demo\nevidence:\n  - id: ev_first\n", "utf8");
+
+    await recordEvidence(file, "ev_second", undefined);
+
+    const next = await readFile(file, "utf8");
+    expect(next).toContain("ev_first");
+    expect(next).toContain("ev_second");
+  });
+
+  it("refuses to rewrite a handoff it could not parse", async () => {
+    const cwd = await mkdtemp(path.join(os.tmpdir(), "breadcrumb-yaml-"));
+    const file = path.join(cwd, "review.yml");
+    const broken = "version: 1\nid: demo\n  bad: [unclosed\n";
+    await writeFile(file, broken, "utf8");
+
+    await expect(recordEvidence(file, "ev_abc", undefined)).rejects.toThrow();
+    expect(await readFile(file, "utf8")).toBe(broken);
+  });
+
+  it("refuses when evidence exists but is not a list", async () => {
+    const cwd = await mkdtemp(path.join(os.tmpdir(), "breadcrumb-yaml-"));
+    const file = path.join(cwd, "review.yml");
+    const source = "version: 1\nid: demo\nevidence:\n  id: ev_wrong_shape\n";
+    await writeFile(file, source, "utf8");
+
+    await expect(recordEvidence(file, "ev_abc", undefined)).rejects.toThrow(/not a list/);
+    expect(await readFile(file, "utf8")).toBe(source);
+  });
+
+  it("writes no caption key when there is no caption", async () => {
+    const cwd = await mkdtemp(path.join(os.tmpdir(), "breadcrumb-yaml-"));
+    const file = path.join(cwd, "review.yml");
+    await writeFile(file, "version: 1\nid: demo\n", "utf8");
+
+    await recordEvidence(file, "ev_solo", undefined);
+
+    expect(await readFile(file, "utf8")).not.toContain("caption");
+  });
+});
+
+describe("evidence add failures", () => {
+  it("names the task before asking for credentials", async () => {
+    const cwd = await createRepo();
+    await initProject(cwd, { agents: [] }, createOutput());
+
+    const result = await runCli(["evidence", "add", "./x.png", "--task", "nope"], cwd);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr.join(" ")).toContain("breadcrumb task new nope");
+  });
+
+  it("rejects a file type the player cannot open", async () => {
+    const cwd = await createRepo();
+    await initProject(cwd, { agents: [] }, createOutput());
+    await createTask(cwd, "demo", createOutput());
+    await writeFile(path.join(cwd, "clip.gif"), "x", "utf8");
+
+    const result = await runCli(["evidence", "add", "./clip.gif", "--task", "demo"], cwd);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr.join(" ")).toContain("png jpeg webp mp4 or webm");
+  });
+
+  it("finds the file even when the caption repeats its name", async () => {
+    const cwd = await createRepo();
+    await initProject(cwd, { agents: [] }, createOutput());
+    await createTask(cwd, "demo", createOutput());
+    await writeFile(path.join(cwd, "shot.png"), "x", "utf8");
+
+    const result = await runCli(
+      ["evidence", "add", "--caption", "shot.png", "shot.png", "--task", "demo"],
+      cwd,
+    );
+
+    // it should get as far as needing a remote, not claim the file is missing
+    expect(result.stderr.join(" ")).toContain("--repo owner/name");
+  });
+
+  it("refuses a broken handoff before it uploads anything", async () => {
+    const cwd = await createRepo();
+    await initProject(cwd, { agents: [] }, createOutput());
+    await createTask(cwd, "demo", createOutput());
+    await writeFile(path.join(cwd, "shot.png"), "x", "utf8");
+    await writeFile(
+      path.join(cwd, ".breadcrumb", "tasks", "demo", "review.yml"),
+      "version: 1\nid: demo\nevidence:\n  id: wrong-shape\n",
+      "utf8",
+    );
+
+    const result = await runCli(["evidence", "add", "./shot.png", "--task", "demo"], cwd);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr.join(" ")).toContain("not a list");
+    expect(result.stderr.join(" ")).not.toContain("uploaded");
+  });
+
+  it("rejects a task id that tries to climb out of the tasks folder", async () => {
+    const cwd = await createRepo();
+    await initProject(cwd, { agents: [] }, createOutput());
+
+    const result = await runCli(["evidence", "add", "./x.png", "--task", "../../etc"], cwd);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr.join(" ")).toContain("not a valid task id");
+  });
+
+  it("asks for --repo when there is no remote to read", async () => {
+    const cwd = await createRepo();
+    await initProject(cwd, { agents: [] }, createOutput());
+    await createTask(cwd, "demo", createOutput());
+    await writeFile(path.join(cwd, "shot.png"), "x", "utf8");
+
+    const result = await runCli(["evidence", "add", "./shot.png", "--task", "demo"], cwd);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr.join(" ")).toContain("--repo owner/name");
   });
 });
 

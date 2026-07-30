@@ -1,0 +1,106 @@
+version: 1
+id: evidence-upload
+title: Upload evidence from the cli and tell agents when to capture it
+problem: >
+  A reviewer takes the agent's word that a change works. The handoff says the
+  picker was added and the reviewer reads a diff to decide whether to believe
+  it. The server side for storing proof has been live since the evidence
+  backend shipped, but nothing an agent runs could reach it.
+user_goal: >
+  Let an agent attach a screenshot or a recording to a task, so the reviewer
+  watches the thing work before reading the code.
+solution: |
+  One command, and the instructions that make an agent reach for it.
+
+  ```mermaid
+  flowchart LR
+    A[agent] --> C[breadcrumb evidence add]
+    C -->|whoami then reserve| S[breadcrumb api]
+    S -->|signed url| C
+    C -->|PUT bytes| R[(r2)]
+    C -->|confirm| S
+    C -->|handle| Y[review.yml]
+  ```
+
+  Bytes go straight to storage. A vercel function caps a request body around
+  four and a half megabytes, so a fifty megabyte recording could never pass
+  through one. The presigned url carries its own permission and expires in
+  fifteen minutes.
+
+  Three details that would be bugs if built the obvious way:
+
+  Confirm answers 409 both when no bytes landed and when the upload was already
+  confirmed. A confirm that times out but actually succeeded therefore looks
+  like a failure on retry, so any 409 is checked against a read before it is
+  believed.
+
+  The presigned url already carries its permission, so the api key must not ride
+  along to cloudflare on the upload.
+
+  The handoff is agent written and often has comments, so the evidence handle is
+  appended through a document parse that preserves them rather than a parse and
+  restringify that would silently reformat the file.
+review_sequence:
+  - title: The schema
+    why: Read this first, it defines what a handle looks like and the cli writes to it.
+    files:
+      - packages/protocol/src/index.ts
+      - packages/protocol/test/index.test.ts
+  - title: The command
+    why: The eight steps, the failure messages, and the yaml edit.
+    files:
+      - packages/cli/src/index.ts
+      - packages/cli/test/index.test.ts
+  - title: Versions
+    why: Two packages move, and the order they publish in matters.
+    files:
+      - packages/protocol/package.json
+      - packages/cli/package.json
+      - pnpm-lock.yaml
+files:
+  - path: packages/protocol/src/index.ts
+    why: >
+      Adds an optional evidence list holding only a handle and a caption. Kept
+      strict so a typo is still caught, and kept minimal because anything else
+      about an upload lives on the server and would drift.
+    risk: medium
+    unknowns:
+      - >
+        The schema is strict, so a handoff written by this cli is rejected by an
+        older one. Protocol 0.3.0 must publish and the web app must be on it
+        before the cli that writes the field is released.
+  - path: packages/protocol/test/index.test.ts
+    why: Covers evidence present, absent, missing id, and an unknown key inside an entry.
+    risk: low
+  - path: packages/cli/src/index.ts
+    why: >
+      Adds the evidence command, the api client, github remote parsing, the
+      comment preserving yaml edit, and the agent instructions in both the
+      AGENTS.md block and the handoff skill.
+    risk: high
+    unknowns:
+      - >
+        The live upload path has not been exercised against a real key yet.
+        Everything before the first network call is covered, and a rejected key
+        was proven against qa, but reserve, upload and confirm still need a run
+        with a real key on a repo in the caller's working set.
+      - >
+        Content types are mapped from the file extension rather than sniffed, so
+        a mislabelled file is refused by storage rather than by the cli. The
+        signature pins the type, so the failure is safe, just late.
+  - path: packages/cli/test/index.test.ts
+    why: >
+      Remote parsing across every spelling github uses, the yaml round trip
+      including comments, and the failure messages that must name a next step.
+    risk: low
+  - path: packages/cli/package.json
+    why: >
+      Adds yaml as a direct dependency, already in the lockfile through the
+      protocol package, and moves the cli to 0.5.0.
+    risk: low
+  - path: packages/protocol/package.json
+    why: Moves the protocol to 0.3.0 so the new field can be published first.
+    risk: low
+  - path: pnpm-lock.yaml
+    why: Records yaml as a direct cli dependency at the version already present.
+    risk: low
