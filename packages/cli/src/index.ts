@@ -57,7 +57,6 @@ type AgentTarget = "claude" | "codex" | "opencode";
 const SKILL_NAME = "breadcrumb-handoff";
 
 // repo local skill dirs per agent
-// codex is mid migration so this writes both its current dir and the documented cross agent dir
 const SKILL_DIRS: Record<AgentTarget, string[]> = {
   claude: [".claude/skills"],
   codex: [".codex/skills", ".agents/skills"],
@@ -262,7 +261,6 @@ export async function initProject(
   }
 
   // claude does not read AGENTS.md so bridge it with an import when claude is
-  // selected or a CLAUDE.md already exists
   const claudePath = path.join(cwd, CLAUDE_FILE);
   if (opts.agents.includes("claude") || (await fileExists(claudePath))) {
     const changed = await ensureClaudeImport(claudePath);
@@ -353,7 +351,6 @@ async function writeSkillFile(
 }
 
 // ensures CLAUDE.md imports AGENTS.md since claude does not read it directly
-// a bare import line with no managed markers added at most once
 async function ensureClaudeImport(claudePath: string): Promise<boolean> {
   if (!(await fileExists(claudePath))) {
     await writeFile(claudePath, "@AGENTS.md\n", "utf8");
@@ -876,8 +873,7 @@ async function readDefaultBranch(cwd: string): Promise<string> {
 }
 
 // detects the best default branch for new breadcrumb config
-// never falls back to the current branch, that would make check diff a branch
-// against itself and pass no matter what changed
+// NOTE: never falls back to the current branch
 async function detectDefaultBranch(cwd: string): Promise<string> {
   const head = await readSymbolicRef(cwd, "refs/remotes/origin/HEAD");
 
