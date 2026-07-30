@@ -1,0 +1,79 @@
+version: 1
+id: breadcrumb-update
+title: Refresh the files breadcrumb owns in a repo that already ran init
+problem: >
+  Every repo that ran init is frozen at whatever content it got that day. The
+  lab repo on my machine is proof, its skill is 68 lines while the current one is
+  102, so it will never learn that evidence add exists. Re-running init does
+  upgrade a repo, but it is an odd thing to ask for and it prompts about agents
+  and workflows that were already chosen.
+user_goal: One command that pulls the newest instructions into an existing repo.
+solution: |
+  `breadcrumb update` refreshes only what breadcrumb owns and leaves the rest
+  alone.
+
+  ```mermaid
+  flowchart TD
+    U[breadcrumb update] --> A{.breadcrumb exists}
+    A -->|no| E[run init first]
+    A -->|yes| B[AGENTS.md block]
+    B --> H{hash matches content}
+    H -->|no| W[you edited it, skip unless --force]
+    H -->|yes| R[replace or report current]
+    R --> S[skills already installed only]
+  ```
+
+  The start marker now carries a short content hash. A version number could only
+  say which release wrote the block. A hash answers the question that matters,
+  whether the block still holds what breadcrumb put there, so an edit inside it
+  is refused rather than silently destroyed.
+
+  Legacy markers have no hash. That is treated as safe to replace, because it is
+  what init already does and what someone typing update expects, and the hash is
+  added on write so the next update can tell.
+
+  Ownership is now explicit. `config.yml` and `templates/review.yml` are yours,
+  the AGENTS.md block and `SKILL.md` are breadcrumb's. Which exposed that the
+  template was written by init and then never read, so `task new` now reads it
+  and editing it finally does something.
+review_sequence:
+  - title: The block and its hash
+    why: Read this first, the hash is the one new idea and everything else follows it.
+    files:
+      - packages/cli/src/index.ts
+  - title: What the command does with it
+    why: The report, the guard, and why only installed agents are touched.
+    files:
+      - packages/cli/test/index.test.ts
+files:
+  - path: packages/cli/src/index.ts
+    why: >
+      Adds the update command, puts a content hash in the start marker, splits
+      the skill writer so update can target installed agents only, and wires
+      task new to the repo template it was already writing.
+    risk: high
+    unknowns:
+      - >
+        The marker regex now has to match both the legacy bare marker and the
+        hashed one. init shares that regex, so a mistake here would affect both
+        commands. Tested against a hand built legacy repo and a real initialised
+        repo copy.
+      - >
+        Reading the repo template in task new is a behaviour change for anyone
+        who edited that file expecting nothing to happen. It was dead weight
+        before, so the new behaviour is what they would have assumed.
+      - >
+        Two managed blocks in one file still leaves the second one stale, and a
+        fenced example of the markers above the real block would be replaced
+        instead of it. Fence aware parsing is not worth the weight yet so this
+        is a known limit rather than a fix.
+      - >
+        Writes are not atomic and not locked. A crash part way through leaves a
+        truncated file, and two runs at once are last writer wins. Acceptable
+        for a cli that a person runs by hand.
+  - path: packages/cli/test/index.test.ts
+    why: >
+      Covers current after init, the legacy upgrade with prose kept on both
+      sides, the edit guard, force, installed agents only, the missing folder
+      case, and the repo template being preferred.
+    risk: low

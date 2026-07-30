@@ -21,6 +21,7 @@ import {
 
 const execFileAsync = promisify(execFile);
 
+const BREADCRUMB_TASKS = ".breadcrumb/tasks";
 const CLAUDE_SKILL = ".claude/skills/breadcrumb-handoff/SKILL.md";
 const CODEX_SKILL = ".codex/skills/breadcrumb-handoff/SKILL.md";
 const AGENTS_SKILL = ".agents/skills/breadcrumb-handoff/SKILL.md";
@@ -84,6 +85,191 @@ describe("default branch detection", () => {
     await initProject(cwd, { agents: [] }, createOutput());
 
     expect(await read(cwd, ".breadcrumb/config.yml")).toContain("default_branch: trunk");
+  });
+});
+
+describe("runCli update", () => {
+  it("reports everything current right after init", async () => {
+    const cwd = await createRepo();
+    await initProject(cwd, { agents: ["claude"] }, createOutput());
+
+    const result = await runCli(["update"], cwd);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.join(" ")).toContain("already current");
+  });
+
+  it("upgrades a legacy block with no hash and keeps the prose around it", async () => {
+    const cwd = await createRepo();
+    await mkdir(path.join(cwd, BREADCRUMB_TASKS), { recursive: true });
+    const head = "# AGENTS.md\n\nmine before.\n\n";
+    const tail = "\n\nmine after.\n";
+    await writeFile(
+      path.join(cwd, "AGENTS.md"),
+      `${head}<!-- breadcrumb:start -->\nold text\n<!-- breadcrumb:end -->${tail}`,
+      "utf8",
+    );
+
+    await runCli(["update"], cwd);
+
+    const next = await read(cwd, "AGENTS.md");
+    expect(next.startsWith(head)).toBe(true);
+    expect(next.endsWith(tail)).toBe(true);
+    expect(next).toMatch(/breadcrumb:start [0-9a-f]{8}/);
+    expect(next.match(/breadcrumb:start/g)?.length).toBe(1);
+  });
+
+  it("refuses to overwrite an edit inside the block", async () => {
+    const cwd = await createRepo();
+    await initProject(cwd, { agents: [] }, createOutput());
+    const edited = (await read(cwd, "AGENTS.md")).replace("Breadcrumb helps", "MINE Breadcrumb helps");
+    await writeFile(path.join(cwd, "AGENTS.md"), edited, "utf8");
+
+    const result = await runCli(["update"], cwd);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr.join(" ")).toContain("--force");
+    expect(await read(cwd, "AGENTS.md")).toBe(edited);
+  });
+
+  it("replaces that edit when forced", async () => {
+    const cwd = await createRepo();
+    await initProject(cwd, { agents: [] }, createOutput());
+    const edited = (await read(cwd, "AGENTS.md")).replace("Breadcrumb helps", "MINE Breadcrumb helps");
+    await writeFile(path.join(cwd, "AGENTS.md"), edited, "utf8");
+
+    const result = await runCli(["update", "--force"], cwd);
+
+    expect(result.exitCode).toBe(0);
+    expect(await read(cwd, "AGENTS.md")).not.toContain("MINE");
+  });
+
+  it("only touches agents that are already installed", async () => {
+    const cwd = await createRepo();
+    await initProject(cwd, { agents: ["claude"] }, createOutput());
+
+    await runCli(["update"], cwd);
+
+    expect(await exists(path.join(cwd, CLAUDE_SKILL))).toBe(true);
+    expect(await exists(path.join(cwd, CODEX_SKILL))).toBe(false);
+    expect(await exists(path.join(cwd, AGENTS_SKILL))).toBe(false);
+  });
+
+  it("still reports current after a crlf checkout", async () => {
+    const cwd = await createRepo();
+    await initProject(cwd, { agents: [] }, createOutput());
+    const agentsPath = path.join(cwd, "AGENTS.md");
+    const lf = await read(cwd, "AGENTS.md");
+    await writeFile(agentsPath, lf.replace(/\r\n/g, "\n").replace(/\n/g, "\r\n"), "utf8");
+    const before = await read(cwd, "AGENTS.md");
+
+    const result = await runCli(["update"], cwd);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.join(" ")).toContain("already current");
+    expect(await read(cwd, "AGENTS.md")).toBe(before);
+  });
+
+  it("stamps a hash onto a legacy block whose content is already current", async () => {
+    const cwd = await createRepo();
+    await initProject(cwd, { agents: [] }, createOutput());
+    const body = (await read(cwd, "AGENTS.md")).match(
+      /<!-- breadcrumb:start [0-9a-f]{8} -->\n([\s\S]*?)\n<!-- breadcrumb:end -->/,
+    )?.[1];
+    await writeFile(
+      path.join(cwd, "AGENTS.md"),
+      `# AGENTS.md\n\n<!-- breadcrumb:start -->\n${body}\n<!-- breadcrumb:end -->\n`,
+      "utf8",
+    );
+
+    await runCli(["update"], cwd);
+
+    expect(await read(cwd, "AGENTS.md")).toMatch(/breadcrumb:start [0-9a-f]{8}/);
+  });
+
+  it("keeps a dollar sequence in the block out of the replacement", async () => {
+    const cwd = await createRepo();
+    await mkdir(path.join(cwd, BREADCRUMB_TASKS), { recursive: true });
+    await writeFile(
+      path.join(cwd, "AGENTS.md"),
+      "# AGENTS.md\n\nHEAD\n\n<!-- breadcrumb:start -->\nold\n<!-- breadcrumb:end -->\n\nTAIL\n",
+      "utf8",
+    );
+
+    await runCli(["update"], cwd);
+
+    const next = await read(cwd, "AGENTS.md");
+    expect(next).toContain("HEAD");
+    expect(next).toContain("TAIL");
+    expect(next.match(/breadcrumb:start/g)?.length).toBe(1);
+  });
+
+  it("refuses a damaged marker instead of appending a second block", async () => {
+    const cwd = await createRepo();
+    await initProject(cwd, { agents: [] }, createOutput());
+    const broken = (await read(cwd, "AGENTS.md")).replace(
+      /breadcrumb:start [0-9a-f]{8}/,
+      "breadcrumb:start ABCD1234",
+    );
+    await writeFile(path.join(cwd, "AGENTS.md"), broken, "utf8");
+
+    const result = await runCli(["update"], cwd);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr.join(" ")).toContain("damaged");
+    expect((await read(cwd, "AGENTS.md")).match(/breadcrumb:start/g)?.length).toBe(1);
+  });
+
+  it("leaves a skill alone after a crlf checkout", async () => {
+    const cwd = await createRepo();
+    await initProject(cwd, { agents: ["claude"] }, createOutput());
+    const skillPath = path.join(cwd, CLAUDE_SKILL);
+    const lf = await readFile(skillPath, "utf8");
+    await writeFile(skillPath, lf.replace(/\r\n/g, "\n").replace(/\n/g, "\r\n"), "utf8");
+    const before = await readFile(skillPath, "utf8");
+
+    const result = await runCli(["update"], cwd);
+
+    expect(result.stdout.join(" ")).toContain("SKILL.md already current");
+    expect(await readFile(skillPath, "utf8")).toBe(before);
+  });
+
+  it("asks for init when there is no breadcrumb folder", async () => {
+    const cwd = await createRepo();
+
+    const result = await runCli(["update"], cwd);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr.join(" ")).toContain("breadcrumb init");
+  });
+});
+
+describe("task new template", () => {
+  it("prefers the repo template so editing it changes new tasks", async () => {
+    const cwd = await createRepo();
+    await initProject(cwd, { agents: [] }, createOutput());
+    const templatePath = path.join(cwd, ".breadcrumb", "templates", "review.yml");
+    await writeFile(templatePath, "version: 1\nid: task-id\ntitle: MY HOUSE STYLE\n", "utf8");
+
+    await createTask(cwd, "demo", createOutput());
+
+    const task = await read(cwd, ".breadcrumb/tasks/demo/review.yml");
+    expect(task).toContain("MY HOUSE STYLE");
+    expect(task).toContain("id: demo");
+  });
+
+  it("falls back to the shipped template when the repo one has no id field", async () => {
+    const cwd = await createRepo();
+    await initProject(cwd, { agents: [] }, createOutput());
+    await writeFile(
+      path.join(cwd, ".breadcrumb", "templates", "review.yml"),
+      "version: 1\ntitle: someone removed the id line\n",
+      "utf8",
+    );
+
+    await createTask(cwd, "demo", createOutput());
+
+    expect(await read(cwd, ".breadcrumb/tasks/demo/review.yml")).toContain("id: demo");
   });
 });
 
@@ -320,6 +506,14 @@ describe("initProject instruction files", () => {
 
     expect(await read(cwd, "AGENTS.md")).toContain("Breadcrumb Review Handoff");
     expect(await read(cwd, "CLAUDE.md")).toContain("@AGENTS.md");
+  });
+
+  it("titles a new AGENTS.md after itself and not after CLAUDE", async () => {
+    const cwd = await createRepo();
+
+    await initProject(cwd, { agents: [] }, createOutput());
+
+    expect((await read(cwd, "AGENTS.md")).startsWith("# AGENTS.md")).toBe(true);
   });
 
   it("appends to an existing AGENTS.md without losing content", async () => {
