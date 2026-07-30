@@ -155,6 +155,55 @@ describe("runCli update", () => {
     expect(await exists(path.join(cwd, AGENTS_SKILL))).toBe(false);
   });
 
+  it("still reports current after a crlf checkout", async () => {
+    const cwd = await createRepo();
+    await initProject(cwd, { agents: [] }, createOutput());
+    const agentsPath = path.join(cwd, "AGENTS.md");
+    const lf = await read(cwd, "AGENTS.md");
+    await writeFile(agentsPath, lf.replace(/\r\n/g, "\n").replace(/\n/g, "\r\n"), "utf8");
+    const before = await read(cwd, "AGENTS.md");
+
+    const result = await runCli(["update"], cwd);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.join(" ")).toContain("already current");
+    expect(await read(cwd, "AGENTS.md")).toBe(before);
+  });
+
+  it("stamps a hash onto a legacy block whose content is already current", async () => {
+    const cwd = await createRepo();
+    await initProject(cwd, { agents: [] }, createOutput());
+    const body = (await read(cwd, "AGENTS.md")).match(
+      /<!-- breadcrumb:start [0-9a-f]{8} -->\n([\s\S]*?)\n<!-- breadcrumb:end -->/,
+    )?.[1];
+    await writeFile(
+      path.join(cwd, "AGENTS.md"),
+      `# AGENTS.md\n\n<!-- breadcrumb:start -->\n${body}\n<!-- breadcrumb:end -->\n`,
+      "utf8",
+    );
+
+    await runCli(["update"], cwd);
+
+    expect(await read(cwd, "AGENTS.md")).toMatch(/breadcrumb:start [0-9a-f]{8}/);
+  });
+
+  it("keeps a dollar sequence in the block out of the replacement", async () => {
+    const cwd = await createRepo();
+    await mkdir(path.join(cwd, BREADCRUMB_TASKS), { recursive: true });
+    await writeFile(
+      path.join(cwd, "AGENTS.md"),
+      "# AGENTS.md\n\nHEAD\n\n<!-- breadcrumb:start -->\nold\n<!-- breadcrumb:end -->\n\nTAIL\n",
+      "utf8",
+    );
+
+    await runCli(["update"], cwd);
+
+    const next = await read(cwd, "AGENTS.md");
+    expect(next).toContain("HEAD");
+    expect(next).toContain("TAIL");
+    expect(next.match(/breadcrumb:start/g)?.length).toBe(1);
+  });
+
   it("asks for init when there is no breadcrumb folder", async () => {
     const cwd = await createRepo();
 
@@ -177,6 +226,20 @@ describe("task new template", () => {
     const task = await read(cwd, ".breadcrumb/tasks/demo/review.yml");
     expect(task).toContain("MY HOUSE STYLE");
     expect(task).toContain("id: demo");
+  });
+
+  it("falls back to the shipped template when the repo one has no id field", async () => {
+    const cwd = await createRepo();
+    await initProject(cwd, { agents: [] }, createOutput());
+    await writeFile(
+      path.join(cwd, ".breadcrumb", "templates", "review.yml"),
+      "version: 1\ntitle: someone removed the id line\n",
+      "utf8",
+    );
+
+    await createTask(cwd, "demo", createOutput());
+
+    expect(await read(cwd, ".breadcrumb/tasks/demo/review.yml")).toContain("id: demo");
   });
 });
 

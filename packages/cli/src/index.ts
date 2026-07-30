@@ -309,7 +309,7 @@ function skillPathsFor(agents: AgentTarget[]): string[] {
 
 // the skill paths already installed in this repo whatever agent put them there
 async function installedSkillPaths(cwd: string): Promise<string[]> {
-  const every = skillPathsFor(["claude", "codex", "opencode"]);
+  const every = skillPathsFor(Object.keys(SKILL_DIRS) as AgentTarget[]);
   const found: string[] = [];
 
   for (const skillRelative of every) {
@@ -382,7 +382,10 @@ async function readTaskTemplate(cwd: string, id: string): Promise<string> {
 
   if (await fileExists(templatePath)) {
     const template = await readFile(templatePath, "utf8");
-    return template.replace("id: task-id", `id: ${id}`);
+    // anchored on the field so renaming the placeholder value cannot silently skip it
+    if (/^id:\s*.*$/m.test(template)) {
+      return template.replace(/^id:\s*.*$/m, `id: ${id}`);
+    }
   }
 
   return getTaskTemplate(id);
@@ -517,7 +520,7 @@ export async function updateProject(
   if (outcome === "edited") {
     output.exitCode = 1;
     output.stderr.push(
-      `${AGENTS_FILE} was edited inside the breadcrumb block so it was left alone. git has your version. re-run with --force to replace it`,
+      `${AGENTS_FILE} has edits inside the breadcrumb block so it was left alone. commit or copy them then re-run with --force to replace them`,
     );
   } else if (outcome === "current") {
     output.stdout.push(`${AGENTS_FILE} already current`);
@@ -531,7 +534,11 @@ export async function updateProject(
     output.stdout.push(
       changed ? `updated ${CLAUDE_FILE}` : `${CLAUDE_FILE} already imports ${AGENTS_FILE}`,
     );
+  } else {
+    output.stdout.push(`no ${CLAUDE_FILE} here so it was skipped`);
   }
+
+  await reportTemplateDrift(cwd, output);
 
   // only the agents already set up get touched so update never adopts a new one
   const installed = await installedSkillPaths(cwd);
@@ -543,6 +550,23 @@ export async function updateProject(
 
   for (const skillRelative of installed) {
     await writeSkillFile(cwd, skillRelative, output);
+  }
+}
+
+// the template is yours so update never rewrites it but silence would hide drift
+async function reportTemplateDrift(cwd: string, output: CliResult): Promise<void> {
+  const templatePath = path.join(cwd, BREADCRUMB_DIR, TEMPLATES_DIR, REVIEW_FILE);
+
+  if (!(await fileExists(templatePath))) {
+    return;
+  }
+
+  const yours = normalizeBlock(await readFile(templatePath, "utf8"));
+
+  if (yours !== normalizeBlock(getReviewTemplate())) {
+    output.stdout.push(
+      `${BREADCRUMB_DIR}/${TEMPLATES_DIR}/${REVIEW_FILE} differs from the shipped template and is yours to keep`,
+    );
   }
 }
 
@@ -990,14 +1014,20 @@ function mapGitStatus(status: string): ChangedFileStatus {
   return "changed";
 }
 
-// a short fingerprint of the block so an edit inside it can be spotted later
-function blockHash(block: string): string {
-  return createHash("sha256").update(block.trim(), "utf8").digest("hex").slice(0, 8);
+// collapses windows line endings so a git checkout cannot change the hash
+function normalizeBlock(block: string): string {
+  return block.replace(/\r\n/g, "\n").trim();
 }
 
+// a short fingerprint of the block so an edit inside it can be spotted later
+function blockHash(block: string): string {
+  return createHash("sha256").update(normalizeBlock(block), "utf8").digest("hex").slice(0, 8);
+}
+
+// wraps the block in markers carrying its fingerprint
 function renderManagedBlock(block: string): string {
-  const trimmed = block.trim();
-  return `<!-- breadcrumb:start ${blockHash(trimmed)} -->\n${trimmed}\n${BREADCRUMB_END}`;
+  const normalized = normalizeBlock(block);
+  return `<!-- breadcrumb:start ${blockHash(normalized)} -->\n${normalized}\n${BREADCRUMB_END}`;
 }
 
 // inserts or replaces a managed markdown block
@@ -1022,17 +1052,19 @@ async function upsertManagedBlock(
     return "appended";
   }
 
-  const [found, recordedHash, currentBlock = ""] = match;
+  const [, recordedHash, currentBlock = ""] = match;
 
   if (recordedHash && recordedHash !== blockHash(currentBlock) && !opts.force) {
     return "edited";
   }
 
-  if (currentBlock.trim() === block.trim()) {
+  // a legacy block with no hash falls through so the rewrite stamps one on
+  if (recordedHash && normalizeBlock(currentBlock) === normalizeBlock(block)) {
     return "current";
   }
 
-  const next = source.replace(found, managedBlock);
+  // replaced through the pattern so a dollar sign in the block cannot splice the file
+  const next = source.replace(MANAGED_BLOCK, () => managedBlock);
   await writeFile(filePath, next.endsWith("\n") ? next : `${next}\n`, "utf8");
   return "replaced";
 }
