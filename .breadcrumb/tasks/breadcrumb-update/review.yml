@@ -62,6 +62,15 @@ files:
         Reading the repo template in task new is a behaviour change for anyone
         who edited that file expecting nothing to happen. It was dead weight
         before, so the new behaviour is what they would have assumed.
+      - >
+        Two managed blocks in one file still leaves the second one stale, and a
+        fenced example of the markers above the real block would be replaced
+        instead of it. Fence aware parsing is not worth the weight yet so this
+        is a known limit rather than a fix.
+      - >
+        Writes are not atomic and not locked. A crash part way through leaves a
+        truncated file, and two runs at once are last writer wins. Acceptable
+        for a cli that a person runs by hand.
   - path: packages/cli/test/index.test.ts
     why: >
       Covers current after init, the legacy upgrade with prose kept on both

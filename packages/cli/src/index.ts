@@ -3,7 +3,7 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { constants, realpathSync } from "node:fs";
-import { access, appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
+import { access, appendFile, mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
@@ -90,7 +90,7 @@ type GitNameStatus = {
   previousPath?: string;
 };
 
-type BlockOutcome = "created" | "appended" | "replaced" | "current" | "edited";
+type BlockOutcome = "created" | "appended" | "replaced" | "current" | "edited" | "damaged";
 
 type EvidenceReservation = {
   id: string;
@@ -246,10 +246,20 @@ export async function initProject(
   output.stdout.push(`created ${BREADCRUMB_DIR}/${TEMPLATES_DIR}/${REVIEW_FILE}`);
 
   // AGENTS.md always holds the contract as the single source of truth
-  await upsertManagedBlock(path.join(cwd, AGENTS_FILE), getBreadcrumbInstructions(), {
-    force: true,
-  });
-  output.stdout.push(`updated ${AGENTS_FILE}`);
+  const blockOutcome = await upsertManagedBlock(
+    path.join(cwd, AGENTS_FILE),
+    getBreadcrumbInstructions(),
+    { force: true },
+  );
+
+  if (blockOutcome === "damaged") {
+    output.exitCode = 1;
+    output.stderr.push(
+      `the breadcrumb markers in ${AGENTS_FILE} look damaged so nothing was changed. repair or remove the markers by hand then re-run`,
+    );
+  } else {
+    output.stdout.push(`updated ${AGENTS_FILE}`);
+  }
 
   // claude does not read AGENTS.md so bridge it with an import when claude is
   // selected or a CLAUDE.md already exists
@@ -329,9 +339,10 @@ async function writeSkillFile(
 ): Promise<void> {
   const skill = getHandoffSkill();
   const target = path.join(cwd, skillRelative);
-  const existed = await fileExists(target);
+  const existed = await isFile(target);
 
-  if (existed && (await readFile(target, "utf8")) === skill) {
+  // compared normalised so a crlf checkout does not look like a change
+  if (existed && normalizeBlock(await readFile(target, "utf8")) === normalizeBlock(skill)) {
     output.stdout.push(`${skillRelative} already current`);
     return;
   }
@@ -380,11 +391,11 @@ export async function createTask(cwd: string, id: string, output: CliResult): Pr
 async function readTaskTemplate(cwd: string, id: string): Promise<string> {
   const templatePath = path.join(cwd, BREADCRUMB_DIR, TEMPLATES_DIR, REVIEW_FILE);
 
-  if (await fileExists(templatePath)) {
+  if (await isFile(templatePath)) {
     const template = await readFile(templatePath, "utf8");
     // anchored on the field so renaming the placeholder value cannot silently skip it
     if (/^id:\s*.*$/m.test(template)) {
-      return template.replace(/^id:\s*.*$/m, `id: ${id}`);
+      return template.replace(/^id:\s*.*$/m, () => `id: ${id}`);
     }
   }
 
@@ -505,9 +516,11 @@ export async function updateProject(
   opts: { force?: boolean },
   output: CliResult,
 ): Promise<void> {
-  if (!(await fileExists(path.join(cwd, BREADCRUMB_DIR)))) {
+  if (!(await isDirectory(path.join(cwd, BREADCRUMB_DIR)))) {
     output.exitCode = 1;
-    output.stderr.push("no .breadcrumb here. run breadcrumb init first");
+    output.stderr.push(
+      `no ${BREADCRUMB_DIR} here. run from the repo root or run breadcrumb init first`,
+    );
     return;
   }
 
@@ -517,7 +530,12 @@ export async function updateProject(
     { force: opts.force ?? false },
   );
 
-  if (outcome === "edited") {
+  if (outcome === "damaged") {
+    output.exitCode = 1;
+    output.stderr.push(
+      `the breadcrumb markers in ${AGENTS_FILE} look damaged so nothing was changed. repair or remove the markers by hand then re-run`,
+    );
+  } else if (outcome === "edited") {
     output.exitCode = 1;
     output.stderr.push(
       `${AGENTS_FILE} has edits inside the breadcrumb block so it was left alone. commit or copy them then re-run with --force to replace them`,
@@ -557,7 +575,7 @@ export async function updateProject(
 async function reportTemplateDrift(cwd: string, output: CliResult): Promise<void> {
   const templatePath = path.join(cwd, BREADCRUMB_DIR, TEMPLATES_DIR, REVIEW_FILE);
 
-  if (!(await fileExists(templatePath))) {
+  if (!(await isFile(templatePath))) {
     return;
   }
 
@@ -1038,7 +1056,10 @@ async function upsertManagedBlock(
 ): Promise<BlockOutcome> {
   const managedBlock = renderManagedBlock(block);
 
-  if (!(await fileExists(filePath))) {
+  if (!(await isFile(filePath))) {
+    if (await fileExists(filePath)) {
+      return "damaged";
+    }
     await writeFile(filePath, `${getTitleForFile(filePath)}\n\n${managedBlock}\n`, "utf8");
     return "created";
   }
@@ -1047,8 +1068,13 @@ async function upsertManagedBlock(
   const match = source.match(MANAGED_BLOCK);
 
   if (!match) {
-    const appended = `${source.trimEnd()}\n\n${managedBlock}\n`;
-    await writeFile(filePath, appended, "utf8");
+    // a start marker the pattern cannot read means appending would duplicate the block
+    if (source.includes("<!-- breadcrumb:start")) {
+      return "damaged";
+    }
+
+    const body = source.trim() === "" ? getTitleForFile(filePath) : source.trimEnd();
+    await writeFile(filePath, `${body}\n\n${managedBlock}\n`, "utf8");
     return "appended";
   }
 
@@ -1083,6 +1109,23 @@ async function fileExists(filePath: string): Promise<boolean> {
   try {
     await access(filePath, constants.F_OK);
     return true;
+  } catch {
+    return false;
+  }
+}
+
+// fileExists is true for a directory too so reads check the kind first
+async function isFile(filePath: string): Promise<boolean> {
+  try {
+    return (await stat(filePath)).isFile();
+  } catch {
+    return false;
+  }
+}
+
+async function isDirectory(dirPath: string): Promise<boolean> {
+  try {
+    return (await stat(dirPath)).isDirectory();
   } catch {
     return false;
   }
@@ -1482,9 +1525,10 @@ function escapeRegExp(value: string): string {
 
 // returns a title for newly created markdown files
 function getTitleForFile(filePath: string): string {
-  return path.basename(filePath).toUpperCase() === AGENTS_FILE
-    ? "# AGENTS.md"
-    : "# CLAUDE.md";
+  // compared case insensitively both ways so AGENTS.MD never titles itself CLAUDE
+  return path.basename(filePath).toLowerCase() === AGENTS_FILE.toLowerCase()
+    ? `# ${AGENTS_FILE}`
+    : `# ${CLAUDE_FILE}`;
 }
 
 // returns the default breadcrumb config

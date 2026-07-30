@@ -204,6 +204,36 @@ describe("runCli update", () => {
     expect(next.match(/breadcrumb:start/g)?.length).toBe(1);
   });
 
+  it("refuses a damaged marker instead of appending a second block", async () => {
+    const cwd = await createRepo();
+    await initProject(cwd, { agents: [] }, createOutput());
+    const broken = (await read(cwd, "AGENTS.md")).replace(
+      /breadcrumb:start [0-9a-f]{8}/,
+      "breadcrumb:start ABCD1234",
+    );
+    await writeFile(path.join(cwd, "AGENTS.md"), broken, "utf8");
+
+    const result = await runCli(["update"], cwd);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr.join(" ")).toContain("damaged");
+    expect((await read(cwd, "AGENTS.md")).match(/breadcrumb:start/g)?.length).toBe(1);
+  });
+
+  it("leaves a skill alone after a crlf checkout", async () => {
+    const cwd = await createRepo();
+    await initProject(cwd, { agents: ["claude"] }, createOutput());
+    const skillPath = path.join(cwd, CLAUDE_SKILL);
+    const lf = await readFile(skillPath, "utf8");
+    await writeFile(skillPath, lf.replace(/\r\n/g, "\n").replace(/\n/g, "\r\n"), "utf8");
+    const before = await readFile(skillPath, "utf8");
+
+    const result = await runCli(["update"], cwd);
+
+    expect(result.stdout.join(" ")).toContain("SKILL.md already current");
+    expect(await readFile(skillPath, "utf8")).toBe(before);
+  });
+
   it("asks for init when there is no breadcrumb folder", async () => {
     const cwd = await createRepo();
 
@@ -476,6 +506,14 @@ describe("initProject instruction files", () => {
 
     expect(await read(cwd, "AGENTS.md")).toContain("Breadcrumb Review Handoff");
     expect(await read(cwd, "CLAUDE.md")).toContain("@AGENTS.md");
+  });
+
+  it("titles a new AGENTS.md after itself and not after CLAUDE", async () => {
+    const cwd = await createRepo();
+
+    await initProject(cwd, { agents: [] }, createOutput());
+
+    expect((await read(cwd, "AGENTS.md")).startsWith("# AGENTS.md")).toBe(true);
   });
 
   it("appends to an existing AGENTS.md without losing content", async () => {
