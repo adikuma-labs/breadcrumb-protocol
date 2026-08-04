@@ -49,7 +49,7 @@ Non-blocking warnings: a described file missing from the reading order, and a `h
 `breadcrumb check` parses the handoff, validates the schema, then compares it against the real changed files from git. The comparison buckets every path:
 
 - `explained`: changed and described
-- `unexplained`: changed but missing from the handoff, this fails strict mode
+- `unexplained`: changed but missing from the handoff, counted and never fatal
 - `unsequenced`: described but not placed in the reading order
 - `invalidReferences`: described but not actually changed
 
@@ -61,7 +61,8 @@ Generated folders like `node_modules`, `dist`, and coverage output are ignored. 
 
 - finds the one `review.yml` the PR touches, zero or several fail
 - diffs against the PR base branch via `GITHUB_BASE_REF`
-- runs strict, so a changed file with no `why` and `risk` fails
+- runs strict, so a described file that was never changed or never sequenced fails
+- never fails for a changed file nobody described, since describing only what a reviewer must open is the intended shape
 - prints GitHub error annotations and writes a step summary
 
 ## Design stance

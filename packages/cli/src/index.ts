@@ -29,8 +29,9 @@ const REVIEW_FILE = "review.yml";
 const CONFIG_FILE = "config.yml";
 const AGENTS_FILE = "AGENTS.md";
 const CLAUDE_FILE = "CLAUDE.md";
-// leaving a file undescribed is the expected case so this one never blocks the gate
 const UNEXPLAINED_CODE = "changed_file_unexplained";
+// the skill allows both of these on purpose so the gate must not undo it
+const NON_BLOCKING = new Set([UNEXPLAINED_CODE, "high_risk_without_unknowns"]);
 const BREADCRUMB_END = "<!-- breadcrumb:end -->";
 
 // matches the legacy marker and the hashed one so old repos still upgrade
@@ -444,7 +445,7 @@ export async function checkTask(
     const count = coverage.unexplained.length;
     warnings.push({
       code: UNEXPLAINED_CODE,
-      message: `${count} changed ${count === 1 ? "file is" : "files are"} not described in review.yml`,
+      message: `${count} changed ${count === 1 ? "file is" : "files are"} not described in review.yml, which is fine unless a reviewer needs to open one`,
       path: `${BREADCRUMB_DIR}/${TASKS_DIR}/${id}/${REVIEW_FILE}`,
       severity: "warning",
     });
@@ -468,7 +469,7 @@ export async function checkTask(
     });
   }
 
-  const blocking = warnings.filter((warning) => warning.code !== UNEXPLAINED_CODE);
+  const blocking = warnings.filter((warning) => !NON_BLOCKING.has(warning.code));
   const ok = errors.length === 0 && (!options.strict || blocking.length === 0);
 
   if (options.strict && blocking.length > 0) {
@@ -775,9 +776,6 @@ async function discoverCiTasks(cwd: string, base: string): Promise<string[]> {
 function fixHint(code: string): string | undefined {
   const bare = code.replace(/^strict_/, "");
 
-  if (bare === UNEXPLAINED_CODE) {
-    return "describe one only if a reviewer needs to open it";
-  }
   if (bare === "changed_file_unsequenced") {
     return "add this file to a review_sequence section";
   }
@@ -1549,7 +1547,6 @@ user_goal: What the user asked for in plain language.
 solution: |
   How it was solved, in markdown. Use headings, lists, and fenced code where they
   help. Add a mermaid diagram only when it clarifies the architecture.
-# list only the files a reviewer needs to open, not everything you changed
 review_sequence:
   - title: First area to review
     why: Why this area should be read first.
@@ -1557,7 +1554,7 @@ review_sequence:
       - src/example.ts
 files:
   - path: src/example.ts
-    why: What to look at in this file.
+    why: Why this file changed.
     risk: low
     change: feature
     unknowns: []

@@ -885,7 +885,9 @@ describe("runCli check --ci", () => {
       const result = await runCli(["check", "--ci"], cwd);
 
       expect(result.exitCode).toBe(0);
-      expect(result.stdout.join("\n")).toContain("1 changed file is not described");
+      expect(result.stdout.join("\n")).toContain(
+        "1 changed file is not described in review.yml, which is fine",
+      );
       expect(result.stdout.join("\n")).not.toContain("::error");
     });
   });
@@ -939,10 +941,34 @@ describe("runCli check --ci", () => {
     await commitAll(cwd, "feat: describe a file out of sequence");
 
     await withEnv({ GITHUB_BASE_REF: "main", GITHUB_STEP_SUMMARY: undefined }, async () => {
-      const result = await runCli(["check", "--ci"], cwd);
+      const result = await runCli(["check", "--ci", "--json"], cwd);
 
       expect(result.exitCode).toBe(1);
-      expect(result.stderr.join("\n")).toContain("not included in review_sequence");
+      const parsed = JSON.parse(result.stdout.join("\n")) as {
+        errors: { code: string }[];
+      };
+      // the schema raises its own warning for this so name the coverage one
+      expect(parsed.errors.map((issue) => issue.code)).toContain(
+        "strict_changed_file_unsequenced",
+      );
+    });
+  });
+
+  it("never fails a high risk file that honestly has no unknowns", async () => {
+    const cwd = await createCiRepo();
+
+    await writeFile(
+      path.join(cwd, ".breadcrumb", "tasks", "quote-add-ons", "review.yml"),
+      getValidReviewYaml().replace("    risk: low", "    risk: high"),
+      "utf8",
+    );
+    await commitAll(cwd, "chore: raise the risk without inventing doubt");
+
+    await withEnv({ GITHUB_BASE_REF: "main", GITHUB_STEP_SUMMARY: undefined }, async () => {
+      const result = await runCli(["check", "--ci"], cwd);
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout.join("\n")).toContain("no unknowns listed");
     });
   });
 
