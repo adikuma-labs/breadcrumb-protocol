@@ -29,6 +29,8 @@ const REVIEW_FILE = "review.yml";
 const CONFIG_FILE = "config.yml";
 const AGENTS_FILE = "AGENTS.md";
 const CLAUDE_FILE = "CLAUDE.md";
+// leaving a file undescribed is the expected case so this one never blocks the gate
+const UNEXPLAINED_CODE = "changed_file_unexplained";
 const BREADCRUMB_END = "<!-- breadcrumb:end -->";
 
 // matches the legacy marker and the hashed one so old repos still upgrade
@@ -437,11 +439,13 @@ export async function checkTask(
   const changedFiles = await getChangedFiles(cwd, base);
   const coverage = compareReviewToChangedFiles(validation.data, changedFiles);
 
-  for (const filePath of coverage.unexplained) {
+  // one line rather than one per file because most files are meant to be left out
+  if (coverage.unexplained.length > 0) {
+    const count = coverage.unexplained.length;
     warnings.push({
-      code: "changed_file_unexplained",
-      message: `${filePath} changed but is not described in review.yml`,
-      path: filePath,
+      code: UNEXPLAINED_CODE,
+      message: `${count} changed ${count === 1 ? "file is" : "files are"} not described in review.yml`,
+      path: `${BREADCRUMB_DIR}/${TASKS_DIR}/${id}/${REVIEW_FILE}`,
       severity: "warning",
     });
   }
@@ -464,10 +468,11 @@ export async function checkTask(
     });
   }
 
-  const ok = errors.length === 0 && (!options.strict || warnings.length === 0);
+  const blocking = warnings.filter((warning) => warning.code !== UNEXPLAINED_CODE);
+  const ok = errors.length === 0 && (!options.strict || blocking.length === 0);
 
-  if (options.strict && warnings.length > 0) {
-    for (const warning of warnings) {
+  if (options.strict && blocking.length > 0) {
+    for (const warning of blocking) {
       errors.push({
         ...warning,
         code: `strict_${warning.code}`,
@@ -770,8 +775,8 @@ async function discoverCiTasks(cwd: string, base: string): Promise<string[]> {
 function fixHint(code: string): string | undefined {
   const bare = code.replace(/^strict_/, "");
 
-  if (bare === "changed_file_unexplained") {
-    return "add an entry under files with a why and a risk for this path";
+  if (bare === UNEXPLAINED_CODE) {
+    return "describe one only if a reviewer needs to open it";
   }
   if (bare === "changed_file_unsequenced") {
     return "add this file to a review_sequence section";
@@ -1544,6 +1549,7 @@ user_goal: What the user asked for in plain language.
 solution: |
   How it was solved, in markdown. Use headings, lists, and fenced code where they
   help. Add a mermaid diagram only when it clarifies the architecture.
+# list only the files a reviewer needs to open, not everything you changed
 review_sequence:
   - title: First area to review
     why: Why this area should be read first.
@@ -1551,7 +1557,7 @@ review_sequence:
       - src/example.ts
 files:
   - path: src/example.ts
-    why: Why this file changed.
+    why: What to look at in this file.
     risk: low
     change: feature
     unknowns: []
@@ -1570,19 +1576,21 @@ function getBreadcrumbInstructions(): string {
 
 Breadcrumb helps a human review agent-written changes fast: instead of a raw diff, they read a short handoff that explains the change and the order to review it.
 
-Write one handoff per task or feature, the change that becomes a PR. When the work is done, before handing it back:
+Write one handoff per pull request, once, after the work is done:
 
 1. write \`.breadcrumb/tasks/<task-id>/review.yml\`
 2. run \`pnpm breadcrumb check --task <task-id>\` and fix what it reports
 
 The handoff explains how to read the change, not what changed line by line. Keep it short and honest.
 
+Describe only the files a reviewer needs to open. A thirty file change with two risky files is a two file handoff, and leaving the rest out is correct. Never write an entry that only says a file is small, mechanical, or a test for the above.
+
 It covers:
 - \`problem\`: the context or pain behind the change
 - \`user_goal\`: what the user actually asked for
 - \`solution\`: how it was solved, in markdown, with a mermaid diagram when it helps
-- \`review_sequence\`: the order to read files, simplest entry point first
-- per file: \`why\` it changed, \`risk\` (low / medium / high), any \`unknowns\` to confirm
+- \`review_sequence\`: the order to read the files worth opening, simplest entry point first
+- per described file: \`why\` to open it, \`risk\` (low / medium / high), any \`unknowns\` to confirm
 
 ## Evidence
 
@@ -1601,14 +1609,32 @@ Do not add model or agent attribution. Do not invent certainty; put doubts in \`
 function getHandoffSkill(): string {
   return `---
 name: breadcrumb-handoff
-description: Use when finishing a coding task in a repo with a .breadcrumb folder, before opening the PR, to write or update the review.yml handoff that guides the human reviewer. Covers tone, what to include, review ordering, risk and unknowns, and running breadcrumb check until it passes.
+description: Use once per pull request, after the work is finished and before opening the PR, to write the review.yml handoff that guides the human reviewer. Not once per commit and not once per subagent. Covers what to describe, what to leave out, review ordering, risk and unknowns, evidence, and running breadcrumb check until it passes.
 ---
 
 # Writing a Breadcrumb handoff
 
-A handoff is a short file that tells a human how to review your change. It is not a summary of the diff. It answers a handful of things: the problem, the goal, how you solved it, what to read first, and what to double check.
+A handoff tells a human how to review your change. It is not a summary of the diff and it is not an inventory of what you touched. They already have the diff.
 
-Write one per task or feature, the change that becomes a PR.
+Write one per pull request, once, after the work is done.
+
+## Describe only what a reviewer must open
+
+This is the part that makes a handoff worth reading, so get it right before anything else.
+
+A large change does not mean a large handoff. Thirty changed files with two that carry the real risk is a two file handoff. Leave the rest out. That is correct, not lazy.
+
+Delete any entry that reads like one of these:
+
+- "small refactor"
+- "comment wording only"
+- "adopts the shared helper"
+- "test for the above"
+- "type update to match"
+
+Each one spends the reviewer's attention and returns nothing. A file earns an entry when a reviewer would be worse off not opening it: it holds the logic, it carries risk, it is where a bug would hide, or you are unsure about it.
+
+\`breadcrumb check\` reports how many files you left undescribed. That is a count, not a complaint. It never fails the gate.
 
 ## The loop
 
@@ -1629,11 +1655,11 @@ Weak: "Added AddOn type and updated QuoteTotal."
 
 **\`solution\`** how you solved it, in markdown. Headings, lists, and fenced code are fine. Add a \`mermaid\` diagram only when it makes the architecture clearer, and keep it to the part that changed. If you are unsure of a relationship, leave it out rather than guess. Optional but recommended.
 
-**\`review_sequence\`** the order to read the change. Put the file that makes the rest make sense first, then build outward. Group into titled sections, each with a one-line \`why\`. A reviewer should be able to read top to bottom and never feel lost.
+**\`review_sequence\`** the order to read the change. Put the file that makes the rest make sense first, then build outward. Group into titled sections, each with a one-line \`why\`. List only the files worth opening. Two or three sections is usually enough.
 
-**per file** in \`files\`:
-- \`why\` one line on why this file changed and what to look at.
-- \`risk\` low / medium / high. Be honest. Money, auth, migrations, and data deletion skew high; a typo fix is low.
+**\`files\`** one entry for each file you named in the sequence, and nothing else:
+- \`why\` one line on what to look at, not on what changed.
+- \`risk\` low / medium / high. Be honest. Money, auth, migrations, and data deletion skew high.
 - \`unknowns\` things you could not verify and want the reviewer to confirm. A high risk file almost always has at least one. If you are sure of everything, leave it empty, do not invent doubt.
 
 ## Evidence
@@ -1664,6 +1690,8 @@ Short, plain, honest. No model or agent attribution. No marketing. If something 
 
 ## Example
 
+This change touched 31 files. Three are worth a reviewer's time.
+
 \`\`\`yaml
 version: 1
 id: quote-add-ons
@@ -1672,7 +1700,7 @@ problem: Reps could not attach optional services to a quote, so upsells happened
 user_goal: Let sales reps add optional services to a quote.
 solution: |
   Add-ons are priced in one module and folded into the quote total, then offered
-  in the builder UI.
+  in the builder UI. The other 28 files adopt the new pricing type.
 
   \`\`\`mermaid
   flowchart LR
@@ -1685,8 +1713,9 @@ review_sequence:
     why: Read this first, the rest of the change depends on how add-ons are priced.
     files:
       - src/pricing/add-ons.ts
+      - src/pricing/add-ons.test.ts
   - title: Quote UI
-    why: Where reps pick add-ons.
+    why: Where reps pick add-ons and the only place the total is shown.
     files:
       - src/quote/builder.tsx
 files:
@@ -1695,12 +1724,15 @@ files:
     risk: high
     unknowns:
       - Confirm tax applies to add-ons the same way it does to base line items.
+  - path: src/pricing/add-ons.test.ts
+    why: Covers the rounding case that broke the old total.
+    risk: medium
   - path: src/quote/builder.tsx
-    why: Adds the add-on picker to the quote builder.
-    risk: low
+    why: Adds the picker and recomputes the total on every change.
+    risk: medium
 \`\`\`
 
-Why it works: the problem frames the change, the solution gives a one screen map, the reading order starts where the logic lives, the risky file names a real thing to confirm, and the easy file is marked easy so the reviewer moves fast.
+Why it works: the problem frames the change, the solution gives a one screen map and accounts for the other 28 files in a single clause, the reading order starts where the logic lives, and the risky file names a real thing to confirm. A reviewer knows where to start within seconds and never reads a sentence written to satisfy a rule.
 `;
 }
 

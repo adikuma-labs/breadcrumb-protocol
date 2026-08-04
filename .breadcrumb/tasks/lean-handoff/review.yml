@@ -1,0 +1,70 @@
+version: 1
+id: lean-handoff
+title: Stop requiring a sentence about every changed file
+problem: >
+  A team trialling breadcrumb turned it off because writing a handoff took too
+  long. Counting the 35 handoffs in the web repo says why. The per file block is
+  53% of an average handoff and 76% of the largest, and 73% of those 445 entries
+  say the file is low risk. The cost scales with the diff while the value does
+  not, and the field reviewers actually want, evidence, is used in 1 of 35.
+user_goal: Make writing a handoff fast enough that developers stop resenting it.
+solution: |
+  Two things forced the cost and neither was the schema. Describing only the
+  important files has always been legal.
+
+  ```mermaid
+  flowchart TD
+    S[skill asks for a why per file] --> A[agent describes all 52]
+    C[check --ci promotes every warning] --> F[gate fails on an undescribed file]
+    F --> A
+    A --> R[handoff nobody reads]
+  ```
+
+  The skill now leads with the rule that matters, that a reviewer should only be
+  sent to files worth opening, and gives concrete phrases to delete. Its example
+  is a 31 file change with three entries rather than a small change where every
+  file happens to matter, because the example is the instruction people follow.
+
+  `check --ci` no longer promotes `changed_file_unexplained` to an error. Without
+  that, the first CI run tells the agent to go back and describe everything it
+  just decided to leave out, and it complies to get the gate green. The other two
+  codes are untouched: a described file that was never changed still fails, and a
+  described file missing from the reading order still fails.
+
+  The count is now one warning rather than one per file, because on a thirty file
+  change the old output was thirty lines telling you about the normal case.
+review_sequence:
+  - title: The skill and the gate
+    why: >
+      Read this first. The skill rewrite and the one line strict exemption are
+      the whole change, and the rest of the file is untouched.
+    files:
+      - packages/cli/src/index.ts
+  - title: What the gate now allows and still refuses
+    why: The tests are where the behaviour change is easiest to confirm.
+    files:
+      - packages/cli/test/index.test.ts
+files:
+  - path: packages/cli/src/index.ts
+    why: >
+      Rewrites the handoff skill and the AGENTS.md block to ask for the files
+      worth opening rather than all of them, retargets the skill trigger to once
+      per pull request, and exempts the undescribed file warning from strict so
+      CI stops re-imposing the cost.
+    risk: medium
+    unknowns:
+      - >
+        The exemption is by issue code. If another non blocking warning is added
+        later it will be promoted under --ci unless it is added to the same
+        filter, so the mechanism is a list of one and reads like a rule.
+      - >
+        Changing the AGENTS.md block changes its content hash, so every repo that
+        runs update will see the block rewritten. That is the intended path but
+        it means a diff in a file people do not expect to change.
+  - path: packages/cli/test/index.test.ts
+    why: >
+      The old test asserted that an undescribed file fails the gate, which is the
+      behaviour being removed, so it is now the opposite assertion. Adds cover for
+      the single collapsed warning, the full path list surviving in json, and both
+      blocking codes still failing.
+    risk: low
