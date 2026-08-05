@@ -954,6 +954,48 @@ describe("runCli check --ci", () => {
     });
   });
 
+  it("stays non blocking under bare --strict with no ci flag", async () => {
+    const cwd = await createCiRepo();
+
+    await writeFile(path.join(cwd, "extra.ts"), "export const extra = 2;\n", "utf8");
+    await writeFile(
+      path.join(cwd, ".breadcrumb", "tasks", "quote-add-ons", "review.yml"),
+      getValidReviewYaml().replace("    risk: low", "    risk: high"),
+      "utf8",
+    );
+    await commitAll(cwd, "feat: an undescribed file and an honest high risk");
+
+    const result = await runCli(
+      ["check", "--task", "quote-add-ons", "--strict", "--base", "main"],
+      cwd,
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.join("\n")).toContain("not described in review.yml");
+  });
+
+  it("pins the collapsed warning code and the path it points at", async () => {
+    const cwd = await createCiRepo();
+
+    await writeFile(path.join(cwd, "extra.ts"), "export const extra = 2;\n", "utf8");
+    await commitAll(cwd, "feat: extra file");
+
+    await withEnv({ GITHUB_BASE_REF: "main", GITHUB_STEP_SUMMARY: undefined }, async () => {
+      const result = await runCli(["check", "--ci", "--json"], cwd);
+
+      const parsed = JSON.parse(result.stdout.join("\n")) as {
+        warnings: { code: string; path: string }[];
+      };
+      const warning = parsed.warnings.find(
+        (issue) => issue.code === "changed_file_unexplained",
+      );
+
+      expect(warning).toBeDefined();
+      // the handoff rather than the file because one warning now covers them all
+      expect(warning?.path).toBe(".breadcrumb/tasks/quote-add-ons/review.yml");
+    });
+  });
+
   it("never fails a high risk file that honestly has no unknowns", async () => {
     const cwd = await createCiRepo();
 

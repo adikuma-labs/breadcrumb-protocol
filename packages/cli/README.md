@@ -62,8 +62,8 @@ AGENTS.md holds the contract; CLAUDE.md just imports it with `@AGENTS.md`. The s
 It checks that:
 
 - `review.yml` has the expected schema
-- every described file was actually changed
-- every described file appears in the review sequence
+- every described file was actually changed, which is always fatal
+- every described file appears in the review sequence, a warning on a plain run and fatal under `--ci`
 - risk values are valid
 - paths are relative and safe
 - generated folders like `node_modules`, `dist`, `.next`, and `coverage` are ignored

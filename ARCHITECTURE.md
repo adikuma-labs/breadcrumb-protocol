@@ -23,14 +23,14 @@ A handoff lives at `.breadcrumb/tasks/<task-id>/review.yml`. One handoff per tas
 | `summary` | no | one line summary |
 | `solution` | no | how it was solved, markdown, mermaid allowed |
 | `review_sequence` | yes | ordered sections, each with `title`, `why`, and a `files` list |
-| `files` | yes | one entry per changed file |
+| `files` | yes | one entry per file a reviewer needs to open, not per changed file |
 
 Each entry in `files`:
 
 | field | required | what it is |
 | --- | --- | --- |
 | `path` | yes | relative posix path, no `..`, no absolute paths |
-| `why` | yes | one line on why this file changed |
+| `why` | yes | one line on what to look at, not on what changed |
 | `risk` | yes | `low`, `medium`, or `high` |
 | `change` | no | `feature`, `fix`, `chore`, `refactor`, `test`, `docs`, `config`, `migration`, `dependency`, `generated`, `other` |
 | `unknowns` | no | things the author could not verify, for the reviewer to confirm |
@@ -42,7 +42,7 @@ Cross-field rules the schema enforces:
 - no duplicate paths in `files` or across `review_sequence`
 - paths are validated as safe relative posix paths
 
-Non-blocking warnings: a described file missing from the reading order, and a `high` risk file with no `unknowns`.
+Warnings, never fatal on a plain `check`: a described file missing from the reading order, and a `high` risk file with no `unknowns`. Under `--ci` the first one is promoted to an error while the second stays a warning, because the skill tells agents not to invent doubt.
 
 ## What check does
 

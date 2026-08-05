@@ -445,7 +445,7 @@ export async function checkTask(
     const count = coverage.unexplained.length;
     warnings.push({
       code: UNEXPLAINED_CODE,
-      message: `${count} changed ${count === 1 ? "file is" : "files are"} not described in review.yml, which is fine unless a reviewer needs to open one`,
+      message: `${count} changed ${count === 1 ? "file is" : "files are"} not described in review.yml, which is fine unless a reviewer needs to open ${count === 1 ? "it" : "one"}`,
       path: `${BREADCRUMB_DIR}/${TASKS_DIR}/${id}/${REVIEW_FILE}`,
       severity: "warning",
     });

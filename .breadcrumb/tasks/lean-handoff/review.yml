@@ -4,9 +4,9 @@ title: Stop requiring a sentence about every changed file
 problem: >
   A team trialling breadcrumb turned it off because writing a handoff took too
   long. Counting the 35 handoffs in the web repo says why. The per file block is
-  53% of an average handoff and 76% of the largest, and 73% of those 445 entries
-  say the file is low risk. The cost scales with the diff while the value does
-  not, and the field reviewers actually want, evidence, is used in 1 of 35.
+  48% of handoff bytes, and 73.6% of those 445 entries say the file is low risk.
+  The cost scales with the diff while the value does not, and the field reviewers
+  actually want, evidence, is used in 1 of 35.
 user_goal: Make writing a handoff fast enough that developers stop resenting it.
 solution: |
   Two things forced the cost and neither was the schema. Describing only the
