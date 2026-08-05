@@ -42,7 +42,7 @@ Cross-field rules the schema enforces:
 - no duplicate paths in `files` or across `review_sequence`
 - paths are validated as safe relative posix paths
 
-Warnings, never fatal on a plain `check`: a described file missing from the reading order, and a `high` risk file with no `unknowns`. Under `--ci` the first one is promoted to an error while the second stays a warning, because the skill tells agents not to invent doubt.
+Warnings, never fatal on a plain `check`: a described file missing from the reading order, and a `high` risk file with no `unknowns`. Under `--strict`, which `--ci` turns on, the first is promoted to an error. The second never is, and neither is a changed file nobody described, because the skill tells agents not to invent doubt and not to describe every file.
 
 ## What check does
 

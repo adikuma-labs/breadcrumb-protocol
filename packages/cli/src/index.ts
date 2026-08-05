@@ -1576,7 +1576,7 @@ Breadcrumb helps a human review agent-written changes fast: instead of a raw dif
 Write one handoff per pull request, once, after the work is done:
 
 1. write \`.breadcrumb/tasks/<task-id>/review.yml\`
-2. run \`pnpm breadcrumb check --task <task-id>\` and fix what it reports
+2. run \`pnpm breadcrumb check --task <task-id>\` and fix the errors it reports
 
 The handoff explains how to read the change, not what changed line by line. Keep it short and honest.
 

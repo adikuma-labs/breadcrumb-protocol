@@ -25,11 +25,19 @@ solution: |
   is a 31 file change with three entries rather than a small change where every
   file happens to matter, because the example is the instruction people follow.
 
-  `check --ci` no longer promotes `changed_file_unexplained` to an error. Without
-  that, the first CI run tells the agent to go back and describe everything it
-  just decided to leave out, and it complies to get the gate green. The other two
-  codes are untouched: a described file that was never changed still fails, and a
-  described file missing from the reading order still fails.
+  Two warnings stopped blocking the gate. `changed_file_unexplained` is the
+  obvious one, because without it the first CI run tells the agent to go back and
+  describe everything it just decided to leave out, and it complies to get the
+  gate green.
+
+  `high_risk_without_unknowns` is the one worth arguing about. The skill tells an
+  agent not to invent doubt, while the gate failed it for having none, so the
+  honest answer was the one that stayed red. The warning still prints. The cost
+  of the change is real though: a high risk file with no unknowns now reaches a
+  reviewer without CI having said anything.
+
+  Still fatal and untouched: a described file that was never changed, and a
+  described file missing from the reading order.
 
   The count is now one warning rather than one per file, because on a thirty file
   change the old output was thirty lines telling you about the normal case.
@@ -54,9 +62,13 @@ files:
     risk: medium
     unknowns:
       - >
-        The exemption is by issue code. If another non blocking warning is added
-        later it will be promoted under --ci unless it is added to the same
-        filter, so the mechanism is a list of one and reads like a rule.
+        The exemption is a set of two issue codes. Any warning added later blocks
+        the gate unless someone remembers to add it, so the mechanism reads like
+        a rule while really being a hand kept list.
+      - >
+        Exempting high_risk_without_unknowns removes the only automated nudge to
+        write an unknown on a risky file. Worth confirming you would rather have
+        that than agents inventing doubt to go green.
       - >
         Changing the AGENTS.md block changes its content hash, so every repo that
         runs update will see the block rewritten. That is the intended path but
