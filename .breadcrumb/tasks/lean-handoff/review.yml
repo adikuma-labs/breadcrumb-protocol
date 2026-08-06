@@ -57,8 +57,9 @@ files:
     why: >
       Rewrites the handoff skill and the AGENTS.md block to ask for the files
       worth opening rather than all of them, retargets the skill trigger to once
-      per pull request, and exempts the undescribed file warning from strict so
-      CI stops re-imposing the cost.
+      per pull request, exempts the undescribed file warning from strict so CI
+      stops re-imposing the cost, and makes the scaffolded template teach the
+      same shape.
     risk: medium
     unknowns:
       - >
@@ -73,6 +74,11 @@ files:
         Changing the AGENTS.md block changes its content hash, so every repo that
         runs update will see the block rewritten. That is the intended path but
         it means a diff in a file people do not expect to change.
+      - >
+        Changing the shipped template makes update print the drift line once for
+        every repo that committed the old one untouched. Informational only, but
+        the wording says the template is yours to keep, which is not quite true
+        for a repo that never edited it.
   - path: packages/cli/test/index.test.ts
     why: >
       The old test asserted that an undescribed file fails the gate, which is the

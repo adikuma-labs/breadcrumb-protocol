@@ -1547,6 +1547,7 @@ user_goal: What the user asked for in plain language.
 solution: |
   How it was solved, in markdown. Use headings, lists, and fenced code where they
   help. Add a mermaid diagram only when it clarifies the architecture.
+# list only the files a reviewer needs to open
 review_sequence:
   - title: First area to review
     why: Why this area should be read first.
@@ -1554,7 +1555,7 @@ review_sequence:
       - src/example.ts
 files:
   - path: src/example.ts
-    why: Why this file changed.
+    why: What to look at in this file.
     risk: low
     change: feature
     unknowns: []
