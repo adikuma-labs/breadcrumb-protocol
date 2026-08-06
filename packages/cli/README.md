@@ -62,10 +62,14 @@ AGENTS.md holds the contract; CLAUDE.md just imports it with `@AGENTS.md`. The s
 It checks that:
 
 - `review.yml` has the expected schema
-- changed files are covered by the review path
+- every described file was actually changed, which is always fatal
+- every described file appears in the review sequence, a warning on a plain run and fatal under `--ci`
 - risk values are valid
 - paths are relative and safe
 - generated folders like `node_modules`, `dist`, `.next`, and `coverage` are ignored
+
+It counts the changed files you left undescribed and prints the total, but never fails for
+them. Describing only the files a reviewer needs to open is the intended shape.
 
 ## CI Gate
 
@@ -73,7 +77,7 @@ It checks that:
 
 - finds the handoff the pull request touches (exactly one `review.yml` is expected; zero or several fail)
 - diffs against the pull request base branch via `GITHUB_BASE_REF`
-- runs strict, so a changed file with no `why` and `risk` fails the check
+- runs strict, so a described file that was never changed or never sequenced fails the check
 - prints GitHub error annotations on `review.yml` and writes a step summary
 
 Add the workflow with `breadcrumb init --workflow`, or copy it yourself:

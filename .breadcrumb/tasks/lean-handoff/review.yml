@@ -1,0 +1,88 @@
+version: 1
+id: lean-handoff
+title: Stop requiring a sentence about every changed file
+problem: >
+  A team trialling breadcrumb turned it off because writing a handoff took too
+  long. Counting the 35 handoffs in the web repo says why. The per file block is
+  48% of handoff bytes, and 73.6% of those 445 entries say the file is low risk.
+  The cost scales with the diff while the value does not, and the field reviewers
+  actually want, evidence, is used in 1 of 35.
+user_goal: Make writing a handoff fast enough that developers stop resenting it.
+solution: |
+  Two things forced the cost and neither was the schema. Describing only the
+  important files has always been legal.
+
+  ```mermaid
+  flowchart TD
+    S[skill asks for a why per file] --> A[agent describes all 52]
+    C[check --ci promotes every warning] --> F[gate fails on an undescribed file]
+    F --> A
+    A --> R[handoff nobody reads]
+  ```
+
+  The skill now leads with the rule that matters, that a reviewer should only be
+  sent to files worth opening, and gives concrete phrases to delete. Its example
+  is a 31 file change with three entries rather than a small change where every
+  file happens to matter, because the example is the instruction people follow.
+
+  Two warnings stopped blocking the gate. `changed_file_unexplained` is the
+  obvious one, because without it the first CI run tells the agent to go back and
+  describe everything it just decided to leave out, and it complies to get the
+  gate green.
+
+  `high_risk_without_unknowns` is the one worth arguing about. The skill tells an
+  agent not to invent doubt, while the gate failed it for having none, so the
+  honest answer was the one that stayed red. The warning still prints. The cost
+  of the change is real though: a high risk file with no unknowns now reaches a
+  reviewer without CI having said anything.
+
+  Still fatal and untouched: a described file that was never changed, and a
+  described file missing from the reading order.
+
+  The count is now one warning rather than one per file, because on a thirty file
+  change the old output was thirty lines telling you about the normal case.
+review_sequence:
+  - title: The skill and the gate
+    why: >
+      Read this first. The skill rewrite and the one line strict exemption are
+      the whole change, and the rest of the file is untouched.
+    files:
+      - packages/cli/src/index.ts
+  - title: What the gate now allows and still refuses
+    why: The tests are where the behaviour change is easiest to confirm.
+    files:
+      - packages/cli/test/index.test.ts
+files:
+  - path: packages/cli/src/index.ts
+    why: >
+      Rewrites the handoff skill and the AGENTS.md block to ask for the files
+      worth opening rather than all of them, retargets the skill trigger to once
+      per pull request, exempts the undescribed file warning from strict so CI
+      stops re-imposing the cost, and makes the scaffolded template teach the
+      same shape.
+    risk: medium
+    unknowns:
+      - >
+        The exemption is a set of two issue codes. Any warning added later blocks
+        the gate unless someone remembers to add it, so the mechanism reads like
+        a rule while really being a hand kept list.
+      - >
+        Exempting high_risk_without_unknowns removes the only automated nudge to
+        write an unknown on a risky file. Worth confirming you would rather have
+        that than agents inventing doubt to go green.
+      - >
+        Changing the AGENTS.md block changes its content hash, so every repo that
+        runs update will see the block rewritten. That is the intended path but
+        it means a diff in a file people do not expect to change.
+      - >
+        Changing the shipped template makes update print the drift line once for
+        every repo that committed the old one untouched. Informational only, but
+        the wording says the template is yours to keep, which is not quite true
+        for a repo that never edited it.
+  - path: packages/cli/test/index.test.ts
+    why: >
+      The old test asserted that an undescribed file fails the gate, which is the
+      behaviour being removed, so it is now the opposite assertion. Adds cover for
+      the single collapsed warning, the full path list surviving in json, and both
+      blocking codes still failing.
+    risk: low

@@ -875,7 +875,7 @@ describe("runCli check --ci", () => {
     });
   });
 
-  it("is strict and annotates undescribed changed files", async () => {
+  it("passes when a changed file is left undescribed", async () => {
     const cwd = await createCiRepo();
 
     await writeFile(path.join(cwd, "extra.ts"), "export const extra = 2;\n", "utf8");
@@ -884,11 +884,133 @@ describe("runCli check --ci", () => {
     await withEnv({ GITHUB_BASE_REF: "main", GITHUB_STEP_SUMMARY: undefined }, async () => {
       const result = await runCli(["check", "--ci"], cwd);
 
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout.join("\n")).toContain(
+        "1 changed file is not described in review.yml, which is fine",
+      );
+      expect(result.stdout.join("\n")).not.toContain("::error");
+    });
+  });
+
+  it("counts undescribed files in one warning rather than one each", async () => {
+    const cwd = await createCiRepo();
+
+    await writeFile(path.join(cwd, "extra.ts"), "export const extra = 2;\n", "utf8");
+    await writeFile(path.join(cwd, "more.ts"), "export const more = 3;\n", "utf8");
+    await commitAll(cwd, "feat: two more files");
+
+    await withEnv({ GITHUB_BASE_REF: "main", GITHUB_STEP_SUMMARY: undefined }, async () => {
+      const result = await runCli(["check", "--ci"], cwd);
+
+      expect(result.exitCode).toBe(0);
+      const warnings = result.stdout.filter((line) => line.startsWith("warning:"));
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toContain("2 changed files are not described");
+    });
+  });
+
+  it("still fails for a described file that never changed", async () => {
+    const cwd = await createCiRepo();
+
+    await writeFile(
+      path.join(cwd, ".breadcrumb", "tasks", "quote-add-ons", "review.yml"),
+      getValidReviewYaml().replaceAll("src.ts", "ghost.ts"),
+      "utf8",
+    );
+    await commitAll(cwd, "chore: point at a missing file");
+
+    await withEnv({ GITHUB_BASE_REF: "main", GITHUB_STEP_SUMMARY: undefined }, async () => {
+      const result = await runCli(["check", "--ci"], cwd);
+
       expect(result.exitCode).toBe(1);
       expect(result.stdout.join("\n")).toContain(
         "::error file=.breadcrumb/tasks/quote-add-ons/review.yml",
       );
-      expect(result.stdout.join("\n")).toContain("extra.ts");
+    });
+  });
+
+  it("still promotes a described file that is missing from the reading order", async () => {
+    const cwd = await createCiRepo();
+
+    await writeFile(path.join(cwd, "extra.ts"), "export const extra = 2;\n", "utf8");
+    await writeFile(
+      path.join(cwd, ".breadcrumb", "tasks", "quote-add-ons", "review.yml"),
+      `${getValidReviewYaml()}  - path: extra.ts\n    why: Adds more behavior.\n    risk: low\n`,
+      "utf8",
+    );
+    await commitAll(cwd, "feat: describe a file out of sequence");
+
+    await withEnv({ GITHUB_BASE_REF: "main", GITHUB_STEP_SUMMARY: undefined }, async () => {
+      const result = await runCli(["check", "--ci", "--json"], cwd);
+
+      expect(result.exitCode).toBe(1);
+      const parsed = JSON.parse(result.stdout.join("\n")) as {
+        errors: { code: string }[];
+      };
+      // the schema raises its own warning for this so name the coverage one
+      expect(parsed.errors.map((issue) => issue.code)).toContain(
+        "strict_changed_file_unsequenced",
+      );
+    });
+  });
+
+  it("stays non blocking under bare --strict with no ci flag", async () => {
+    const cwd = await createCiRepo();
+
+    await writeFile(path.join(cwd, "extra.ts"), "export const extra = 2;\n", "utf8");
+    await writeFile(
+      path.join(cwd, ".breadcrumb", "tasks", "quote-add-ons", "review.yml"),
+      getValidReviewYaml().replace("    risk: low", "    risk: high"),
+      "utf8",
+    );
+    await commitAll(cwd, "feat: an undescribed file and an honest high risk");
+
+    const result = await runCli(
+      ["check", "--task", "quote-add-ons", "--strict", "--base", "main"],
+      cwd,
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.join("\n")).toContain("not described in review.yml");
+  });
+
+  it("pins the collapsed warning code and the path it points at", async () => {
+    const cwd = await createCiRepo();
+
+    await writeFile(path.join(cwd, "extra.ts"), "export const extra = 2;\n", "utf8");
+    await commitAll(cwd, "feat: extra file");
+
+    await withEnv({ GITHUB_BASE_REF: "main", GITHUB_STEP_SUMMARY: undefined }, async () => {
+      const result = await runCli(["check", "--ci", "--json"], cwd);
+
+      const parsed = JSON.parse(result.stdout.join("\n")) as {
+        warnings: { code: string; path: string }[];
+      };
+      const warning = parsed.warnings.find(
+        (issue) => issue.code === "changed_file_unexplained",
+      );
+
+      expect(warning).toBeDefined();
+      // the handoff rather than the file because one warning now covers them all
+      expect(warning?.path).toBe(".breadcrumb/tasks/quote-add-ons/review.yml");
+    });
+  });
+
+  it("never fails a high risk file that honestly has no unknowns", async () => {
+    const cwd = await createCiRepo();
+
+    await writeFile(
+      path.join(cwd, ".breadcrumb", "tasks", "quote-add-ons", "review.yml"),
+      getValidReviewYaml().replace("    risk: low", "    risk: high"),
+      "utf8",
+    );
+    await commitAll(cwd, "chore: raise the risk without inventing doubt");
+
+    await withEnv({ GITHUB_BASE_REF: "main", GITHUB_STEP_SUMMARY: undefined }, async () => {
+      const result = await runCli(["check", "--ci"], cwd);
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout.join("\n")).toContain("no unknowns listed");
     });
   });
 
@@ -908,8 +1030,12 @@ describe("runCli check --ci", () => {
   it("keeps json output parseable and free of annotation lines", async () => {
     const cwd = await createCiRepo();
 
-    await writeFile(path.join(cwd, "extra.ts"), "export const extra = 2;\n", "utf8");
-    await commitAll(cwd, "feat: extra file");
+    await writeFile(
+      path.join(cwd, ".breadcrumb", "tasks", "quote-add-ons", "review.yml"),
+      getValidReviewYaml().replaceAll("src.ts", "ghost.ts"),
+      "utf8",
+    );
+    await commitAll(cwd, "chore: point at a missing file");
 
     await withEnv({ GITHUB_BASE_REF: "main", GITHUB_STEP_SUMMARY: undefined }, async () => {
       const result = await runCli(["check", "--ci", "--json"], cwd);
@@ -918,6 +1044,24 @@ describe("runCli check --ci", () => {
       const parsed = JSON.parse(result.stdout.join("\n")) as { ok: boolean };
       expect(parsed.ok).toBe(false);
       expect(result.stdout.join("\n")).not.toContain("::error");
+    });
+  });
+
+  it("keeps every undescribed path in the json coverage", async () => {
+    const cwd = await createCiRepo();
+
+    await writeFile(path.join(cwd, "extra.ts"), "export const extra = 2;\n", "utf8");
+    await writeFile(path.join(cwd, "more.ts"), "export const more = 3;\n", "utf8");
+    await commitAll(cwd, "feat: two more files");
+
+    await withEnv({ GITHUB_BASE_REF: "main", GITHUB_STEP_SUMMARY: undefined }, async () => {
+      const result = await runCli(["check", "--ci", "--json"], cwd);
+
+      expect(result.exitCode).toBe(0);
+      const parsed = JSON.parse(result.stdout.join("\n")) as {
+        coverage: { unexplained: string[] };
+      };
+      expect(parsed.coverage.unexplained).toEqual(["extra.ts", "more.ts"]);
     });
   });
 

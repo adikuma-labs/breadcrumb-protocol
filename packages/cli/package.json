@@ -1,6 +1,6 @@
 {
   "name": "@adikuma/breadcrumb",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "type": "module",
   "description": "cli for creating and checking breadcrumb review handoffs",
   "bin": {

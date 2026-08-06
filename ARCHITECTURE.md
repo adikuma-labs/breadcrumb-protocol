@@ -23,14 +23,14 @@ A handoff lives at `.breadcrumb/tasks/<task-id>/review.yml`. One handoff per tas
 | `summary` | no | one line summary |
 | `solution` | no | how it was solved, markdown, mermaid allowed |
 | `review_sequence` | yes | ordered sections, each with `title`, `why`, and a `files` list |
-| `files` | yes | one entry per changed file |
+| `files` | yes | one entry per file a reviewer needs to open, not per changed file |
 
 Each entry in `files`:
 
 | field | required | what it is |
 | --- | --- | --- |
 | `path` | yes | relative posix path, no `..`, no absolute paths |
-| `why` | yes | one line on why this file changed |
+| `why` | yes | one line on what to look at, not on what changed |
 | `risk` | yes | `low`, `medium`, or `high` |
 | `change` | no | `feature`, `fix`, `chore`, `refactor`, `test`, `docs`, `config`, `migration`, `dependency`, `generated`, `other` |
 | `unknowns` | no | things the author could not verify, for the reviewer to confirm |
@@ -42,14 +42,14 @@ Cross-field rules the schema enforces:
 - no duplicate paths in `files` or across `review_sequence`
 - paths are validated as safe relative posix paths
 
-Non-blocking warnings: a described file missing from the reading order, and a `high` risk file with no `unknowns`.
+Warnings, never fatal on a plain `check`: a described file missing from the reading order, and a `high` risk file with no `unknowns`. Under `--strict`, which `--ci` turns on, the first is promoted to an error. The second never is, and neither is a changed file nobody described, because the skill tells agents not to invent doubt and not to describe every file.
 
 ## What check does
 
 `breadcrumb check` parses the handoff, validates the schema, then compares it against the real changed files from git. The comparison buckets every path:
 
 - `explained`: changed and described
-- `unexplained`: changed but missing from the handoff, this fails strict mode
+- `unexplained`: changed but missing from the handoff, counted and never fatal
 - `unsequenced`: described but not placed in the reading order
 - `invalidReferences`: described but not actually changed
 
@@ -61,7 +61,8 @@ Generated folders like `node_modules`, `dist`, and coverage output are ignored. 
 
 - finds the one `review.yml` the PR touches, zero or several fail
 - diffs against the PR base branch via `GITHUB_BASE_REF`
-- runs strict, so a changed file with no `why` and `risk` fails
+- runs strict, so a described file that was never changed or never sequenced fails
+- never fails for a changed file nobody described, since describing only what a reviewer must open is the intended shape
 - prints GitHub error annotations and writes a step summary
 
 ## Design stance
