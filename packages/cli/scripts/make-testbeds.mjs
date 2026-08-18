@@ -51,6 +51,7 @@ function writeFiles(dir, files) {
 }
 
 // initializes a git repo with one commit so diffs and default branch work
+// the fake remote is what link and evidence read the repo name from
 function initGit(dir) {
   const opts = { cwd: dir, stdio: "ignore" };
   execFileSync("git", ["init", "-b", "main"], opts);
@@ -58,6 +59,7 @@ function initGit(dir) {
   execFileSync("git", ["config", "user.name", "Testbed"], opts);
   execFileSync("git", ["add", "."], opts);
   execFileSync("git", ["commit", "-m", "chore: init"], opts);
+  execFileSync("git", ["remote", "add", "origin", "git@github.com:acme/fake-app.git"], opts);
 }
 
 rmSync(testbedsRoot, { recursive: true, force: true });

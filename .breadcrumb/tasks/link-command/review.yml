@@ -1,0 +1,88 @@
+version: 1
+id: link-command
+title: Give agents a Breadcrumb link to hand back instead of the GitHub one
+problem: >
+  An agent finishes work, runs check, opens the pull request with gh, and relays
+  whatever gh printed. That is a GitHub link, so the reviewer reviews on GitHub,
+  which is the thing Breadcrumb exists to replace. The handoff skill did not
+  help even when it was loaded, because its loop ends at "check passes" and the
+  pull request is opened after that.
+user_goal: >
+  Have Claude Code and Codex hand back a Breadcrumb URL after they open a pull
+  request, every time, without being asked.
+solution: |
+  A command rather than a rule. A rule is a transform the agent has to remember
+  to perform on the output of another tool, twenty steps deep. A command is
+  output it copies.
+
+  ```mermaid
+  flowchart LR
+    R[git remote] --> L[breadcrumb link]
+    G[gh pr view] --> L
+    P[--pr] -.-> L
+    L --> U[origin/review/owner/repo/number]
+  ```
+
+  `breadcrumb link` concatenates three strings and prints one line. The origin
+  comes from `apiBase()` and the repo from `detectRepoFullName()`, both of which
+  already existed for evidence upload. Only the pull request number is new: from
+  `--pr` when given, else from `gh pr view --json number,isDraft`. When the pull
+  request is a draft a note goes to stderr, because the room opens a draft but
+  the inbox hides it, and stdout stays one clean URL for anything that pipes it.
+
+  It makes no network call of its own and needs no credential. The URL is an
+  address, not a ticket. Two people who open the same pull request use the same
+  string and the session cookie decides what each of them may do.
+
+  The rule then goes in both instruction files. The AGENTS block is always in
+  context, so it carries the always on version. The skill loads during the
+  handoff, so its loop gains a step 5 and a short section on the link, and its
+  trigger description widens to cover opening the pull request. Every command in
+  the shipped text now reads `pnpm breadcrumb` rather than bare `breadcrumb`,
+  because bare does not resolve in a plain shell inside a pnpm project and the
+  skill and block previously disagreed about which to use.
+
+  The testbeds gain a fake origin remote so link can be exercised in them at all.
+  `escapeRegExp` was dead since the managed block replace moved to a function
+  replacer, so it is gone. `EvidenceError` is renamed `CliError` since link
+  reuses it and the old name was now wrong.
+review_sequence:
+  - title: The command
+    why: >
+      Read this first. It is about fifty lines and it is the whole feature. The
+      instruction text edits below it are what tell the agent to run it.
+    files:
+      - packages/cli/src/index.ts
+  - title: What it does and refuses
+    why: The eight new tests pin every branch except the real draft note.
+    files:
+      - packages/cli/test/index.test.ts
+files:
+  - path: packages/cli/src/index.ts
+    why: >
+      `runLinkCommand`, `parsePrNumber` and `readPullFromGh` are the command.
+      Then the skill text gains step 5 and a link section, the AGENTS block gains
+      step 3, and every shipped command reads `pnpm breadcrumb`. Worth checking
+      that the draft note is on stderr and that `--pr` skips gh entirely.
+    risk: medium
+    unknowns:
+      - >
+        The draft note is verified by hand against a real pull request rather
+        than by a unit test, since it needs gh authenticated and a live PR. The
+        result of that run is recorded in the pull request.
+      - >
+        `gh` is spawned by name and resolved through PATH. It worked on Windows
+        here. It is preinstalled on ubuntu-latest. A machine without it gets the
+        friendly message asking for --pr, which is the intended fallback.
+      - >
+        Changing both instruction texts changes their hashes, so every repo that
+        runs update sees AGENTS.md and every installed skill rewritten. That is
+        the intended rollout path, and the legacy unhashed marker in older repos
+        was confirmed to upgrade without --force.
+  - path: packages/cli/test/index.test.ts
+    why: >
+      Seven tests for link and one that both instruction files carry the rule.
+      The gh failure test empties PATH and passes --repo so gh is the only spawn
+      that can fail. Note that on Windows PATH and Path alias in process.env, so
+      stubbing both keys leaks an empty PATH into every later test.
+    risk: low
