@@ -34,13 +34,22 @@ solution: |
   address, not a ticket. Two people who open the same pull request use the same
   string and the session cookie decides what each of them may do.
 
-  The rule then goes in both instruction files. The AGENTS block is always in
-  context, so it carries the always on version. The skill loads during the
-  handoff, so its loop gains a step 5 and a short section on the link, and its
-  trigger description widens to cover opening the pull request. Every command in
-  the shipped text now reads `pnpm breadcrumb` rather than bare `breadcrumb`,
-  because bare does not resolve in a plain shell inside a pnpm project and the
-  skill and block previously disagreed about which to use.
+  The rule then goes in both instruction files, and the way it is phrased is the
+  other half of the fix. The old block opened by describing Breadcrumb and said
+  "write one handoff per pull request", which is a frequency, not a trigger. An
+  agent read it as background, finished the work, and ran `gh pr create` out of
+  habit. The block now opens with "Before you open a pull request, do this
+  first" and closes with "Your final message names the Breadcrumb link", so the
+  action is tied to the moment and the done state is defined. The skill trigger
+  changes from "after the work is finished" to "whenever you are about to open a
+  pull request" for the same reason. That description is the only thing an agent
+  reads to decide whether to load the skill, and "after" fires too late.
+
+  The AGENTS block is always in context, so it carries the short version. The
+  skill loads during the handoff, so its loop gains a step 5 and a short section
+  on the link. Every command in the shipped text now reads `pnpm breadcrumb`
+  rather than bare `breadcrumb`, because bare does not resolve in a plain shell
+  inside a pnpm project and the skill and block previously disagreed.
 
   The testbeds gain a fake origin remote so link can be exercised in them at all.
   `escapeRegExp` was dead since the managed block replace moved to a function
