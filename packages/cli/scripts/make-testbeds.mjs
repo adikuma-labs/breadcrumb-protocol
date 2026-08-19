@@ -51,7 +51,6 @@ function writeFiles(dir, files) {
 }
 
 // initializes a git repo with one commit so diffs and default branch work
-// the fake remote is what link and evidence read the repo name from
 function initGit(dir) {
   const opts = { cwd: dir, stdio: "ignore" };
   execFileSync("git", ["init", "-b", "main"], opts);
