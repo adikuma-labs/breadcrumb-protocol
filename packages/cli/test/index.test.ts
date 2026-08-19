@@ -716,7 +716,11 @@ describe("initProject skills", () => {
     for (const text of [agents, skill]) {
       expect(text).toContain("pnpm breadcrumb link");
       expect(text).toContain("draft");
+      expect(text).toContain("final message names the Breadcrumb link");
     }
+    // the trigger has to fire before gh pr create not after the work
+    expect(agents).toContain("Before you open a pull request");
+    expect(skill).toContain("description: Use whenever you are about to open a pull request");
     // the loop has to run past check passing
     expect(skill).toContain("5. Open the pull request");
   });

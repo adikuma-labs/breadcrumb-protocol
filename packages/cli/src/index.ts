@@ -1633,17 +1633,17 @@ function getTaskTemplate(id: string): string {
 function getBreadcrumbInstructions(): string {
   return `## Breadcrumb Review Handoff
 
-Breadcrumb helps a human review agent-written changes fast: instead of a raw diff, they read a short handoff that explains the change and the order to review it.
-
-Write one handoff per pull request, once, after the work is done:
+Before you open a pull request, or when you are asked to open one, do this first. No pull request without a handoff.
 
 1. write \`.breadcrumb/tasks/<task-id>/review.yml\`
 2. run \`pnpm breadcrumb check --task <task-id>\` and fix the errors it reports
 3. open the pull request, then run \`pnpm breadcrumb link\` and hand back the url it prints
 
-The reviewer opens the Breadcrumb link, not the GitHub pull request. \`link\` reads the repository from git and the pull request number from \`gh\`, so it takes no arguments. Pass \`--pr <number>\` when \`gh\` cannot see the branch. It says so when the pull request is a draft, which opens in Breadcrumb but does not appear in the inbox until it is marked ready for review.
+Your final message names the Breadcrumb link. That is how the task is handed back. The reviewer opens Breadcrumb, not the GitHub pull request.
 
-The handoff explains how to read the change, not what changed line by line. Keep it short and honest.
+\`link\` reads the repository from git and the pull request number from \`gh\`, so it takes no arguments. Pass \`--pr <number>\` when \`gh\` cannot see the branch. It says so when the pull request is a draft, which opens in Breadcrumb but does not appear in the inbox until it is marked ready for review.
+
+Breadcrumb helps a human review agent-written changes fast: instead of a raw diff, they read a short handoff that explains the change and the order to review it. Write one handoff per pull request. It explains how to read the change, not what changed line by line. Keep it short and honest.
 
 Describe only the files a reviewer needs to open. A thirty file change with two risky files is a two file handoff, and leaving the rest out is correct. Never write an entry that only says a file is small, mechanical, or a test for the above.
 
@@ -1671,14 +1671,14 @@ Do not add model or agent attribution. Do not invent certainty; put doubts in \`
 function getHandoffSkill(): string {
   return `---
 name: breadcrumb-handoff
-description: Use once per pull request, after the work is finished, to write the review.yml handoff that guides the human reviewer, then open the PR and hand back the Breadcrumb link. Not once per commit and not once per subagent. Covers what to describe, what to leave out, review ordering, risk and unknowns, evidence, running breadcrumb check until it passes, and the link to hand back.
+description: Use whenever you are about to open a pull request, or are asked to open one. Writes the review.yml handoff that guides the human reviewer, runs breadcrumb check until it passes, opens the pull request, and hands back the Breadcrumb link. Once per pull request, not once per commit and not once per subagent.
 ---
 
 # Writing a Breadcrumb handoff
 
 A handoff tells a human how to review your change. It is not a summary of the diff and it is not an inventory of what you touched. They already have the diff.
 
-Write one per pull request, once, after the work is done.
+Write one per pull request, once, after the work is done and before the pull request is opened. Your final message names the Breadcrumb link, not the GitHub one.
 
 ## Describe only what a reviewer must open
 
