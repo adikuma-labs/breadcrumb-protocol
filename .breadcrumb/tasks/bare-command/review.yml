@@ -1,0 +1,70 @@
+version: 1
+id: bare-command
+title: Drop the pnpm prefix that breaks the commands in a polyglot repo
+problem: >
+  0.7.0 told agents to run `pnpm breadcrumb check` and `pnpm breadcrumb link`.
+  Breadcrumb runs at the repository root, and plenty of roots are not
+  JavaScript projects. In one real repo, a Python root whose JavaScript all
+  sits under `apps/`, every instruction fails with
+  ERR_PNPM_NO_IMPORTER_MANIFEST_FOUND. pnpm refuses to run outside a package,
+  so it never reaches the command, and a global install cannot save it.
+user_goal: >
+  Have the documented commands work in any repository, including one whose root
+  is not a JavaScript project.
+solution: |
+  Nine call sites lose the prefix. `breadcrumb check`, `breadcrumb link`,
+  `breadcrumb task new`, `breadcrumb evidence add`.
+
+  The prefix was introduced in 0.7.0 to settle an inconsistency: the AGENTS
+  block used `pnpm breadcrumb` and the skill used bare. Unifying was right and
+  the direction was wrong. The reasoning was that bare would not resolve inside
+  a pnpm project, which is only true when the CLI is not installed globally,
+  and it ignored that the prefix hard fails where there is no package at all.
+  Bare works in both cases when installed, so bare is the form that has no
+  repository shape it cannot handle.
+
+  Both instruction surfaces now say why, since an agent that hits the error
+  will otherwise improvise. The AGENTS block gets one line because it is always
+  in context. The skill gets a short section naming the error, the kinds of
+  root it happens in, and `pnpm dlx @adikuma/breadcrumb@latest` as the form
+  that needs nothing installed. The README gains a table of the three forms and
+  when each is right.
+
+  Verified at the root that produced the original failure: bare and dlx both
+  print the url, and that root still has no `package.json`.
+review_sequence:
+  - title: The text agents read
+    why: >
+      All nine call sites and the two new explanations are here. The rest of the
+      file is untouched.
+    files:
+      - packages/cli/src/index.ts
+  - title: What the test pins
+    why: >
+      The assertion is narrower than it looks and the comment explains why it
+      has to be.
+    files:
+      - packages/cli/test/index.test.ts
+files:
+  - path: packages/cli/src/index.ts
+    why: >
+      Nine invocations lose the prefix, and both instruction surfaces gain the
+      reason plus the dlx fallback. Worth checking the tone of the new skill
+      section, since it is the longest piece of prose the skill has gained.
+    risk: low
+    unknowns:
+      - >
+        Bare `breadcrumb` needs the CLI on PATH. A machine without it now gets
+        "command not found" where the old text would have run through pnpm in a
+        JavaScript repo. The dlx line is the answer, but an agent has to read as
+        far as that line to find it.
+      - >
+        Changing both texts changes their hashes again, one day after 0.7.0, so
+        every repo that already updated will see a second rewrite.
+  - path: packages/cli/test/index.test.ts
+    why: >
+      A flat ban on the string fails against the prose that warns about it, so
+      the assertion checks only the numbered steps. That is narrower than the
+      rule it stands for, and a prefixed command written outside a numbered list
+      would pass.
+    risk: low

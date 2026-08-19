@@ -6,13 +6,38 @@ Breadcrumb helps reviewers understand agent-written pull requests by asking the 
 
 ## Install
 
-Run it without installing:
+Install it once per machine, so `breadcrumb` works in any repository:
 
 ```bash
-pnpm dlx @adikuma/breadcrumb init
+pnpm add -g @adikuma/breadcrumb
 ```
 
-Or add it to a project:
+Or run it without installing anything:
+
+```bash
+pnpm dlx @adikuma/breadcrumb@latest init
+```
+
+### Which one to use, and why not `pnpm breadcrumb`
+
+Breadcrumb runs at the **repository root**, because that is where `.breadcrumb/` lives and where the diff is taken from. That root is often not a JavaScript project: a Python service, a Go service, or a monorepo whose JavaScript all sits under `apps/`.
+
+That rules out one form:
+
+```bash
+pnpm breadcrumb check --task my-feature
+# ERR_PNPM_NO_IMPORTER_MANIFEST_FOUND  No package.json was found in ...
+```
+
+pnpm refuses to run outside a package, so it fails before it ever looks for the command, even when breadcrumb is installed globally. The prefix gains nothing in a JavaScript repo and breaks the command everywhere else.
+
+| Form | Works where | Use it when |
+| --- | --- | --- |
+| `breadcrumb check` | any repository, if installed globally | the normal case, and what the agent instructions tell agents to run |
+| `pnpm dlx @adikuma/breadcrumb@latest check` | any repository, nothing installed | CI, a fresh machine, or a one off |
+| `pnpm breadcrumb check` | only a repo with a root `package.json` | never; prefer one of the two above |
+
+A project that would rather pin the version than install globally can add it as a dev dependency, but only if the repository root is a JavaScript project:
 
 ```bash
 pnpm add -D @adikuma/breadcrumb

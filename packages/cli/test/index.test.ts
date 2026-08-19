@@ -714,9 +714,14 @@ describe("initProject skills", () => {
     const agents = await read(cwd, "AGENTS.md");
     const skill = await read(cwd, CLAUDE_SKILL);
     for (const text of [agents, skill]) {
-      expect(text).toContain("pnpm breadcrumb link");
+      expect(text).toContain("breadcrumb link");
       expect(text).toContain("draft");
       expect(text).toContain("final message names the Breadcrumb link");
+      // the prose may quote the broken form as a warning so only the steps are checked
+      const steps = text.split("\n").filter((line) => /^\d+\. /.test(line));
+      expect(steps.length).toBeGreaterThan(0);
+      expect(steps.join("\n")).not.toContain("pnpm breadcrumb");
+      expect(text).toContain("pnpm dlx @adikuma/breadcrumb@latest");
     }
     // the trigger has to fire before gh pr create not after the work
     expect(agents).toContain("Before you open a pull request");
