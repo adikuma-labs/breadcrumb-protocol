@@ -29,6 +29,8 @@ breadcrumb check --task <id>
 breadcrumb check --task <id> --json
 breadcrumb check --task <id> --strict
 breadcrumb check --ci
+breadcrumb evidence add <file> --task <id> [--caption <text>]
+breadcrumb link [--pr <number>] [--repo owner/name]
 ```
 
 ## Typical Flow
@@ -37,7 +39,11 @@ breadcrumb check --ci
 breadcrumb init
 breadcrumb task new quote-add-ons
 breadcrumb check --task quote-add-ons
+gh pr create
+breadcrumb link
 ```
+
+`breadcrumb link` prints the review room url for the open pull request, which is what an agent hands back instead of the GitHub link. It reads the repository from the git remote and the pull request number from `gh pr view`, so it takes no arguments and makes no network call of its own. Pass `--pr <number>` when `gh` cannot see the branch, and `--repo owner/name` when the remote is a fork. It prints a note to stderr when the pull request is a draft, since a draft opens in the room but does not appear in the inbox until it is marked ready for review.
 
 `breadcrumb init` sets up the handoff and asks which agents should get the handoff skill. A developer sees an interactive picker; an agent or CI passes `--agent` (defaulting to `claude,codex`). It creates:
 

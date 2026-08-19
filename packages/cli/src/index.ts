@@ -101,10 +101,10 @@ type EvidenceReservation = {
 };
 
 // a failure the user can act on rather than a crash
-class EvidenceError extends Error {}
+class CliError extends Error {}
 
 function fail(message: string): never {
-  throw new EvidenceError(message);
+  throw new CliError(message);
 }
 
 // runs the breadcrumb cli and returns captured output
@@ -148,6 +148,11 @@ export async function runCli(args: string[], cwd = process.cwd()): Promise<CliRe
 
     if (parsed.command === "evidence") {
       await runEvidenceCommand(parsed.rest, cwd, output);
+      return output;
+    }
+
+    if (parsed.command === "link") {
+      await runLinkCommand(parsed.rest, cwd, output);
       return output;
     }
 
@@ -1183,9 +1188,70 @@ async function runEvidenceCommand(
   } catch (error) {
     output.exitCode = 1;
     output.stderr.push(
-      error instanceof EvidenceError ? error.message : `evidence upload failed: ${String(error)}`,
+      error instanceof CliError ? error.message : `evidence upload failed: ${String(error)}`,
     );
   }
+}
+
+// prints the review room url for a pull request
+async function runLinkCommand(args: string[], cwd: string, output: CliResult): Promise<void> {
+  try {
+    const repoFullName = getFlagValue(args, "--repo") ?? (await detectRepoFullName(cwd));
+    const pr = getFlagValue(args, "--pr");
+
+    const pull =
+      pr === undefined ? await readPullFromGh(cwd) : { number: parsePrNumber(pr), draft: false };
+
+    output.stdout.push(`${apiBase()}/review/${repoFullName}/${pull.number}`);
+
+    // the room opens a draft but the inbox hides it until it is ready
+    if (pull.draft) {
+      output.stderr.push(
+        "note: this pull request is a draft. it opens in breadcrumb but does not appear in the inbox until it is marked ready for review",
+      );
+    }
+  } catch (error) {
+    output.exitCode = 1;
+    output.stderr.push(
+      error instanceof CliError ? error.message : `could not build the link: ${String(error)}`,
+    );
+  }
+}
+
+// a positive integer and nothing else
+function parsePrNumber(raw: string): number {
+  if (!/^[1-9][0-9]*$/.test(raw)) {
+    fail(`${raw} is not a pull request number. pass --pr <number>`);
+  }
+
+  return Number(raw);
+}
+
+// reads the pull request gh reports for the current branch
+async function readPullFromGh(cwd: string): Promise<{ number: number; draft: boolean }> {
+  let stdout: string;
+
+  try {
+    ({ stdout } = await execFileAsync("gh", ["pr", "view", "--json", "number,isDraft"], { cwd }));
+  } catch {
+    fail(
+      "no --pr given and gh could not resolve a pull request for this branch. pass --pr <number>",
+    );
+  }
+
+  let parsed: { number?: unknown; isDraft?: unknown };
+
+  try {
+    parsed = JSON.parse(stdout) as { number?: unknown; isDraft?: unknown };
+  } catch {
+    fail("gh did not answer with json. pass --pr <number>");
+  }
+
+  if (typeof parsed.number !== "number") {
+    fail("gh did not report a pull request number. pass --pr <number>");
+  }
+
+  return { number: parsed.number, draft: parsed.isDraft === true };
 }
 
 // uploads one file and records the handle in the task handoff
@@ -1517,11 +1583,6 @@ function getFlagValue(args: string[], flag: string): string | undefined {
   return index >= 0 ? args[index + 1] : undefined;
 }
 
-// escapes a string for use in a regular expression
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
 // returns a title for newly created markdown files
 function getTitleForFile(filePath: string): string {
   // compared case insensitively both ways so AGENTS.MD never titles itself CLAUDE
@@ -1572,14 +1633,17 @@ function getTaskTemplate(id: string): string {
 function getBreadcrumbInstructions(): string {
   return `## Breadcrumb Review Handoff
 
-Breadcrumb helps a human review agent-written changes fast: instead of a raw diff, they read a short handoff that explains the change and the order to review it.
-
-Write one handoff per pull request, once, after the work is done:
+Before you open a pull request, or when you are asked to open one, do this first. No pull request without a handoff.
 
 1. write \`.breadcrumb/tasks/<task-id>/review.yml\`
 2. run \`pnpm breadcrumb check --task <task-id>\` and fix the errors it reports
+3. open the pull request, then run \`pnpm breadcrumb link\` and hand back the url it prints
 
-The handoff explains how to read the change, not what changed line by line. Keep it short and honest.
+Your final message names the Breadcrumb link. That is how the task is handed back. The reviewer opens Breadcrumb, not the GitHub pull request.
+
+\`link\` reads the repository from git and the pull request number from \`gh\`, so it takes no arguments. Pass \`--pr <number>\` when \`gh\` cannot see the branch. It says so when the pull request is a draft, which opens in Breadcrumb but does not appear in the inbox until it is marked ready for review.
+
+Breadcrumb helps a human review agent-written changes fast: instead of a raw diff, they read a short handoff that explains the change and the order to review it. Write one handoff per pull request. It explains how to read the change, not what changed line by line. Keep it short and honest.
 
 Describe only the files a reviewer needs to open. A thirty file change with two risky files is a two file handoff, and leaving the rest out is correct. Never write an entry that only says a file is small, mechanical, or a test for the above.
 
@@ -1595,7 +1659,7 @@ It covers:
 When a change is visual or behavioural, capture proof it runs and attach it:
 
 \`\`\`
-breadcrumb evidence add ./demo.mp4 --task <task-id> --caption "what the reviewer is looking at"
+pnpm breadcrumb evidence add ./demo.mp4 --task <task-id> --caption "what the reviewer is looking at"
 \`\`\`
 
 The reviewer watches it before reading the diff, so they spend their attention on how you did it rather than whether you did it. Skip evidence when there is nothing to see, such as a pure refactor. One or two clips, not a reel.
@@ -1607,14 +1671,14 @@ Do not add model or agent attribution. Do not invent certainty; put doubts in \`
 function getHandoffSkill(): string {
   return `---
 name: breadcrumb-handoff
-description: Use once per pull request, after the work is finished and before opening the PR, to write the review.yml handoff that guides the human reviewer. Not once per commit and not once per subagent. Covers what to describe, what to leave out, review ordering, risk and unknowns, evidence, and running breadcrumb check until it passes.
+description: Use whenever you are about to open a pull request, or are asked to open one. Writes the review.yml handoff that guides the human reviewer, runs breadcrumb check until it passes, opens the pull request, and hands back the Breadcrumb link. Once per pull request, not once per commit and not once per subagent.
 ---
 
 # Writing a Breadcrumb handoff
 
 A handoff tells a human how to review your change. It is not a summary of the diff and it is not an inventory of what you touched. They already have the diff.
 
-Write one per pull request, once, after the work is done.
+Write one per pull request, once, after the work is done and before the pull request is opened. Your final message names the Breadcrumb link, not the GitHub one.
 
 ## Describe only what a reviewer must open
 
@@ -1632,16 +1696,29 @@ Delete any entry that reads like one of these:
 
 Each one spends the reviewer's attention and returns nothing. A file earns an entry when a reviewer would be worse off not opening it: it holds the logic, it carries risk, it is where a bug would hide, or you are unsure about it.
 
-\`breadcrumb check\` reports how many files you left undescribed. That is a count, not a complaint. It never fails the gate.
+\`pnpm breadcrumb check\` reports how many files you left undescribed. That is a count, not a complaint. It never fails the gate.
 
 ## The loop
 
-1. \`breadcrumb task new <task-id>\` creates \`.breadcrumb/tasks/<task-id>/review.yml\` from the template.
+1. \`pnpm breadcrumb task new <task-id>\` creates \`.breadcrumb/tasks/<task-id>/review.yml\` from the template.
 2. Fill it in (see below).
-3. \`breadcrumb check --task <task-id>\` validates it and compares it against your real git changes.
+3. \`pnpm breadcrumb check --task <task-id>\` validates it and compares it against your real git changes.
 4. Fix what it reports. Repeat until it prints \`breadcrumb check passed\`.
+5. Open the pull request, then run \`pnpm breadcrumb link\` and hand back the url it prints.
 
-Do not hand the task back until check passes.
+Do not hand the task back until check passes and you have given the Breadcrumb link.
+
+## The link you hand back
+
+The reviewer opens Breadcrumb, not GitHub. Once the pull request is open:
+
+\`\`\`
+pnpm breadcrumb link
+\`\`\`
+
+It prints one url and nothing else. Hand that back instead of the GitHub url \`gh pr create\` printed. It reads the repository from git and the pull request number from \`gh\`, so it takes no arguments. Pass \`--pr <number>\` when \`gh\` cannot see the branch.
+
+A draft is worth linking. \`link\` tells you when the pull request is a draft, because a draft opens in Breadcrumb but does not appear in the inbox until it is marked ready for review. Pass that on.
 
 ## Fields
 
@@ -1665,7 +1742,7 @@ Weak: "Added AddOn type and updated QuoteTotal."
 If the change is visual or behavioural, capture proof it actually runs and attach it to the task:
 
 \`\`\`
-breadcrumb evidence add ./demo.mp4 --task <task-id> --caption "add-on picker updates the total"
+pnpm breadcrumb evidence add ./demo.mp4 --task <task-id> --caption "add-on picker updates the total"
 \`\`\`
 
 This writes the handle into the handoff for you. Screenshots and short recordings only: png, jpeg, webp, mp4, webm.
@@ -1771,6 +1848,7 @@ commands:
   breadcrumb check --task <id> [--json] [--strict] [--base <ref>]
   breadcrumb check --ci [--base <ref>]
   breadcrumb evidence add <file> --task <id> [--caption <text>] [--repo owner/name]
+  breadcrumb link [--pr <number>] [--repo owner/name]
 `;
 }
 

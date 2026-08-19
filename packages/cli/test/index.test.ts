@@ -297,6 +297,84 @@ describe("parseGithubRemote", () => {
   });
 });
 
+// a repo with the remote link reads from
+async function createRemoteRepo(url = "git@github.com:acme/app.git"): Promise<string> {
+  const cwd = await createRepo();
+  await execFileAsync("git", ["remote", "add", "origin", url], { cwd });
+  return cwd;
+}
+
+describe("runCli link", () => {
+  it("builds the room url from the remote and --pr with no network", async () => {
+    const cwd = await createRemoteRepo();
+
+    const result = await runCli(["link", "--pr", "229"], cwd);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toEqual(["https://app.breadcrumb.run/review/acme/app/229"]);
+    expect(result.stderr).toEqual([]);
+  });
+
+  it("accepts --pr=229 the way agents often write it", async () => {
+    const cwd = await createRemoteRepo();
+
+    const result = await runCli(["link", "--pr=229"], cwd);
+
+    expect(result.stdout).toEqual(["https://app.breadcrumb.run/review/acme/app/229"]);
+  });
+
+  it("honours BREADCRUMB_API_URL so a dev server can be targeted", async () => {
+    const cwd = await createRemoteRepo("https://github.com/acme/app");
+
+    await withEnv({ BREADCRUMB_API_URL: "http://localhost:3000/" }, async () => {
+      const result = await runCli(["link", "--pr", "7"], cwd);
+      expect(result.stdout).toEqual(["http://localhost:3000/review/acme/app/7"]);
+    });
+  });
+
+  it("prefers --repo over the remote for a fork", async () => {
+    const cwd = await createRemoteRepo("git@github.com:fork/app.git");
+
+    const result = await runCli(["link", "--pr", "1", "--repo", "acme/app"], cwd);
+
+    expect(result.stdout).toEqual(["https://app.breadcrumb.run/review/acme/app/1"]);
+  });
+
+  it("asks for --repo when there is no remote", async () => {
+    const cwd = await createRepo();
+
+    const result = await runCli(["link", "--pr", "1"], cwd);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stdout).toEqual([]);
+    expect(result.stderr.join(" ")).toContain("--repo owner/name");
+  });
+
+  it("refuses a --pr that is not a positive integer", async () => {
+    const cwd = await createRemoteRepo();
+
+    for (const bad of ["abc", "0", "-3", "1.5", "229x"]) {
+      const result = await runCli(["link", "--pr", bad], cwd);
+      expect(result.exitCode).toBe(1);
+      expect(result.stdout).toEqual([]);
+      expect(result.stderr.join(" ")).toContain("not a pull request number");
+    }
+  });
+
+  it("asks for --pr when gh cannot resolve a pull request", async () => {
+    const cwd = await createRepo();
+
+    // an empty path so gh is the only spawn that can fail
+    const emptyBin = await mkdtemp(path.join(os.tmpdir(), "breadcrumb-nobin-"));
+    await withEnv({ PATH: emptyBin }, async () => {
+      const result = await runCli(["link", "--repo", "acme/app"], cwd);
+      expect(result.exitCode).toBe(1);
+      expect(result.stdout).toEqual([]);
+      expect(result.stderr.join(" ")).toContain("pass --pr");
+    });
+  });
+});
+
 describe("recordEvidence", () => {
   it("keeps comments and formatting in the handoff", async () => {
     const cwd = await mkdtemp(path.join(os.tmpdir(), "breadcrumb-yaml-"));
@@ -625,6 +703,26 @@ describe("initProject skills", () => {
     expect(await exists(path.join(cwd, CLAUDE_SKILL))).toBe(false);
     expect(await exists(path.join(cwd, CODEX_SKILL))).toBe(false);
     expect(await exists(path.join(cwd, AGENTS_SKILL))).toBe(false);
+  });
+
+  it("tells the agent to hand back the breadcrumb link in both instruction files", async () => {
+    const cwd = await createRepo();
+
+    await initProject(cwd, { agents: ["claude"] }, createOutput());
+
+    // both files carry the rule since only the block is always in context
+    const agents = await read(cwd, "AGENTS.md");
+    const skill = await read(cwd, CLAUDE_SKILL);
+    for (const text of [agents, skill]) {
+      expect(text).toContain("pnpm breadcrumb link");
+      expect(text).toContain("draft");
+      expect(text).toContain("final message names the Breadcrumb link");
+    }
+    // the trigger has to fire before gh pr create not after the work
+    expect(agents).toContain("Before you open a pull request");
+    expect(skill).toContain("description: Use whenever you are about to open a pull request");
+    // the loop has to run past check passing
+    expect(skill).toContain("5. Open the pull request");
   });
 });
 

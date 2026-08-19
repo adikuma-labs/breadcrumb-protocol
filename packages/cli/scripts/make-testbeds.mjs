@@ -58,6 +58,7 @@ function initGit(dir) {
   execFileSync("git", ["config", "user.name", "Testbed"], opts);
   execFileSync("git", ["add", "."], opts);
   execFileSync("git", ["commit", "-m", "chore: init"], opts);
+  execFileSync("git", ["remote", "add", "origin", "git@github.com:acme/fake-app.git"], opts);
 }
 
 rmSync(testbedsRoot, { recursive: true, force: true });
