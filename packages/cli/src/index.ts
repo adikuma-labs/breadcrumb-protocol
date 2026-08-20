@@ -1636,12 +1636,14 @@ function getBreadcrumbInstructions(): string {
 Before you open a pull request, or when you are asked to open one, do this first. No pull request without a handoff.
 
 1. write \`.breadcrumb/tasks/<task-id>/review.yml\`
-2. run \`pnpm breadcrumb check --task <task-id>\` and fix the errors it reports
-3. open the pull request, then run \`pnpm breadcrumb link\` and hand back the url it prints
+2. run \`breadcrumb check --task <task-id>\` and fix the errors it reports
+3. open the pull request, then run \`breadcrumb link\` and hand back the url it prints
 
 Your final message names the Breadcrumb link. That is how the task is handed back. The reviewer opens Breadcrumb, not the GitHub pull request.
 
 \`link\` reads the repository from git and the pull request number from \`gh\`, so it takes no arguments. Pass \`--pr <number>\` when \`gh\` cannot see the branch. It says so when the pull request is a draft, which opens in Breadcrumb but does not appear in the inbox until it is marked ready for review.
+
+Run these as \`breadcrumb\`, never as \`pnpm breadcrumb\`. Breadcrumb runs at the repository root, and a root with no \`package.json\` makes pnpm fail before it reaches the command. If \`breadcrumb\` is not found, use \`pnpm dlx @adikuma/breadcrumb@latest\` in its place.
 
 Breadcrumb helps a human review agent-written changes fast: instead of a raw diff, they read a short handoff that explains the change and the order to review it. Write one handoff per pull request. It explains how to read the change, not what changed line by line. Keep it short and honest.
 
@@ -1659,7 +1661,7 @@ It covers:
 When a change is visual or behavioural, capture proof it runs and attach it:
 
 \`\`\`
-pnpm breadcrumb evidence add ./demo.mp4 --task <task-id> --caption "what the reviewer is looking at"
+breadcrumb evidence add ./demo.mp4 --task <task-id> --caption "what the reviewer is looking at"
 \`\`\`
 
 The reviewer watches it before reading the diff, so they spend their attention on how you did it rather than whether you did it. Skip evidence when there is nothing to see, such as a pure refactor. One or two clips, not a reel.
@@ -1696,24 +1698,38 @@ Delete any entry that reads like one of these:
 
 Each one spends the reviewer's attention and returns nothing. A file earns an entry when a reviewer would be worse off not opening it: it holds the logic, it carries risk, it is where a bug would hide, or you are unsure about it.
 
-\`pnpm breadcrumb check\` reports how many files you left undescribed. That is a count, not a complaint. It never fails the gate.
+\`breadcrumb check\` reports how many files you left undescribed. That is a count, not a complaint. It never fails the gate.
 
 ## The loop
 
-1. \`pnpm breadcrumb task new <task-id>\` creates \`.breadcrumb/tasks/<task-id>/review.yml\` from the template.
+1. \`breadcrumb task new <task-id>\` creates \`.breadcrumb/tasks/<task-id>/review.yml\` from the template.
 2. Fill it in (see below).
-3. \`pnpm breadcrumb check --task <task-id>\` validates it and compares it against your real git changes.
+3. \`breadcrumb check --task <task-id>\` validates it and compares it against your real git changes.
 4. Fix what it reports. Repeat until it prints \`breadcrumb check passed\`.
-5. Open the pull request, then run \`pnpm breadcrumb link\` and hand back the url it prints.
+5. Open the pull request, then run \`breadcrumb link\` and hand back the url it prints.
 
 Do not hand the task back until check passes and you have given the Breadcrumb link.
+
+## How to invoke it
+
+Always \`breadcrumb <command>\`. Never \`pnpm breadcrumb <command>\`.
+
+Breadcrumb runs at the repository root, because that is where \`.breadcrumb/\` lives and where the diff is taken from. Plenty of roots have no \`package.json\`: a Python service, a Go service, or a monorepo whose JavaScript all sits under \`apps/\`. In those repos \`pnpm breadcrumb check\` fails with \`ERR_PNPM_NO_IMPORTER_MANIFEST_FOUND\` before pnpm ever looks for the command, because pnpm refuses to run outside a package. The prefix buys nothing anywhere and breaks it there.
+
+If the shell answers \`command not found\`, breadcrumb is not installed on this machine. Use it without installing:
+
+\`\`\`
+pnpm dlx @adikuma/breadcrumb@latest check --task <task-id>
+\`\`\`
+
+That form works in any repository. It is slower per call because it fetches the package each time, so prefer a plain \`breadcrumb\` when it is available.
 
 ## The link you hand back
 
 The reviewer opens Breadcrumb, not GitHub. Once the pull request is open:
 
 \`\`\`
-pnpm breadcrumb link
+breadcrumb link
 \`\`\`
 
 It prints one url and nothing else. Hand that back instead of the GitHub url \`gh pr create\` printed. It reads the repository from git and the pull request number from \`gh\`, so it takes no arguments. Pass \`--pr <number>\` when \`gh\` cannot see the branch.
@@ -1742,7 +1758,7 @@ Weak: "Added AddOn type and updated QuoteTotal."
 If the change is visual or behavioural, capture proof it actually runs and attach it to the task:
 
 \`\`\`
-pnpm breadcrumb evidence add ./demo.mp4 --task <task-id> --caption "add-on picker updates the total"
+breadcrumb evidence add ./demo.mp4 --task <task-id> --caption "add-on picker updates the total"
 \`\`\`
 
 This writes the handle into the handoff for you. Screenshots and short recordings only: png, jpeg, webp, mp4, webm.
